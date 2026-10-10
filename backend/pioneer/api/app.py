@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import auth, bench, board, scripts
+from pioneer.api import auth, bench, board, projects, scripts
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
@@ -18,6 +18,8 @@ from pioneer.dt import read_dt
 from pioneer.hal import BenchHAL, create_hal
 from pioneer.hw import HW
 from pioneer.resources import ResourceManager
+from pioneer.nodes import registry
+from pioneer.projects import ProjectManager
 from pioneer.scripts import ScriptManager
 
 API = "/pioneer/api"
@@ -48,9 +50,16 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.scripts = sm = ScriptManager(cfg.data_dir, app.state.hw)
         sm.on_pins, sm.on_leds = live.mark, live.mark_leds
         live.add_source(sm.drain)
+        app.state.projects = pm = ProjectManager(cfg.data_dir, app.state.hw, registry())
+        pm.on_pins, pm.on_leds = live.mark, live.mark_leds
+        live.add_source(pm.drain)
+        live.on_message("ui", lambda m: pm.ui(m["project"], m["node"], m.get("value")))
         live.start()
         sm.start_autostart()
+        await asyncio.to_thread(pm.start_autostart)
         yield
+        await asyncio.to_thread(pm.stop_all)
+        pm.close()
         sm.stop_all()
         await live.stop()
         app.state.hw.close_all(safe_value=False)
@@ -65,6 +74,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     protected.include_router(board.router)
     protected.include_router(bench.router)
     protected.include_router(scripts.router)
+    protected.include_router(projects.router)
     app.include_router(public, prefix=API)
     app.include_router(protected, prefix=API)
 

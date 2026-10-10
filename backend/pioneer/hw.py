@@ -56,7 +56,9 @@ class HW:
     # ---- пины
     def acquire(self, owner: str, owner_name: str, pin_id: str, mode: RuntimeMode, *,
                 initial: bool = False, debounce_ms: int = 0,
-                on_edge: PinListener | None = None) -> None:
+                on_edge: PinListener | None = None, listener_key: str | None = None) -> None:
+        """Захватить пин и открыть линию. listener_key — несколько слушателей фронтов у одного
+        владельца (ноды проекта): ключ вида "<owner>#<нода>", снимаются вместе с владельцем."""
         with self._lock:
             self.res.claim(owner, owner_name, pin_id, mode)
             cur = self._open.get(pin_id)
@@ -74,7 +76,7 @@ class HW:
                     self.res.release(owner, pin_id)
                     raise
             if on_edge:
-                cur.listeners[owner] = on_edge
+                cur.listeners[listener_key or owner] = on_edge
 
     def write(self, pin_id: str, value: bool) -> None:
         self._require(pin_id, "gpio_out").line.write(value)  # type: ignore[union-attr]
@@ -150,7 +152,8 @@ class HW:
                 self._close(rid, safe_value)
             for rid, o in self._open.items():
                 if resource is None or rid == resource:
-                    o.listeners.pop(owner, None)
+                    for key in [k for k in o.listeners if k == owner or k.startswith(owner + "#")]:
+                        del o.listeners[key]
 
     def close_all(self, safe_value: bool = False) -> None:
         with self._lock:

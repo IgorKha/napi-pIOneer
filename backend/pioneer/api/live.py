@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import threading
 
@@ -32,10 +33,15 @@ class LiveHub:
         self._task: asyncio.Task | None = None
         self._last_leds: dict[str, dict] = {}
         self._sources: list = []  # () -> list[dict]: доп. сообщения (логи/статусы скриптов)
+        self._handlers: dict[str, object] = {}  # type -> fn(msg): сообщения от клиента
         hw.watch(lambda pin_id, ev: self.mark(pin_id))
 
     def add_source(self, drain) -> None:
         self._sources.append(drain)
+
+    def on_message(self, msg_type: str, handler) -> None:
+        """Сообщения от клиента {"type": msg_type, ...} (значения UI-контролов проектов)."""
+        self._handlers[msg_type] = handler
 
     def mark(self, *pin_ids: str) -> None:
         """Потокобезопасно: вызывается и из потока HAL."""
@@ -76,11 +82,24 @@ class LiveHub:
             await ws.send_json({"type": "pins", "pins": self.snapshot()})
             await ws.send_json({"type": "leds", "leds": self.led_states()})
             while True:
-                await ws.receive_text()  # фаза 0: от клиента ничего не ждём
+                await self._client_message(ws, await ws.receive_text())
         except WebSocketDisconnect:
             pass
         finally:
             self.clients.discard(ws)
+
+    async def _client_message(self, ws: WebSocket, text: str) -> None:
+        try:
+            msg = json.loads(text)
+            handler = self._handlers.get(msg.get("type")) if isinstance(msg, dict) else None
+        except ValueError:
+            return
+        if handler is None:
+            return
+        try:
+            await asyncio.to_thread(handler, msg)  # движок отвечает из своего потока
+        except Exception as e:
+            await ws.send_json({"type": "error", "request": msg.get("type"), "message": str(e)})
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop())
