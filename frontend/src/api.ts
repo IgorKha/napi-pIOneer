@@ -42,12 +42,34 @@ export interface Iface {
 export interface Board {
   id: string;
   title: string;
-  hal: "mock" | "gpiod";
+  hal: "bench" | "linux";
   headers: { id: string; rows: number; cols: number; pin1: string }[];
   adc: { vref: number; bits: number };
   overlays: string[];
   interfaces: Iface[];
   pins: Pin[];
+}
+
+export interface BenchModel {
+  id: string;
+  kind: string;
+  title: string;
+  config: Record<string, unknown>;
+  actions: string[];
+  state: Record<string, unknown>;
+}
+
+export interface BenchKind {
+  kind: string;
+  title: string;
+  params: Record<string, { type: string; default?: unknown; choices?: string[]; min?: number; max?: number }>;
+  actions: string[];
+}
+
+export interface BenchInfo {
+  enabled: boolean;
+  kinds: BenchKind[];
+  models: BenchModel[];
 }
 
 export interface InterfacePlan {
@@ -63,12 +85,13 @@ const API = "/pioneer/api";
 
 export class ApiError extends Error {}
 
-async function call<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(API + path, body === undefined ? undefined : {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+async function call<T>(path: string, body?: unknown, method?: string): Promise<T> {
+  const init: RequestInit = { method: method ?? (body === undefined ? "GET" : "POST") };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(API + path, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = typeof data.detail === "string" ? data.detail : `${res.status} ${res.statusText}`;
@@ -83,6 +106,10 @@ export const api = {
     call(`/board/pins/${pin}/manual`, { mode, value }),
   plan: (enable: string[], disable: string[]) =>
     call<InterfacePlan>("/board/interfaces/plan", { enable, disable }),
-  mockLevel: (pin: string, value: boolean) => call(`/mock/pins/${pin}`, { value }),
-  mockAdc: (channel: number, volts: number) => call(`/mock/adc/${channel}`, { volts }),
+  bench: () => call<BenchInfo>("/bench"),
+  benchAdd: (kind: string, config: Record<string, unknown>) =>
+    call<BenchModel>("/bench/models", { kind, config }),
+  benchRemove: (id: string) => call(`/bench/models/${id}`, undefined, "DELETE"),
+  benchAction: (id: string, name: string, payload: Record<string, unknown> = {}) =>
+    call(`/bench/models/${id}/actions/${name}`, payload),
 };

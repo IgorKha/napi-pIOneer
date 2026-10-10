@@ -1,24 +1,51 @@
-"""ResourceManager — кто какой пин держит и в каком рантайм-режиме (spec 3.5).
+"""ResourceManager — кто какой ресурс держит (spec 3.5).
 
-- gpio_out / soft_pwm — эксклюзивно;
-- gpio_in / adc — разделяемые (одна линия на всех читателей, рефкаунт владельцев);
-- пин, отданный интерфейсу (uEnv), в рантайм-режимах недоступен;
-- пакет захватов атомарен: либо все, либо ни одного.
+Ресурсы:
+- пин: "J9-7" в рантайм-режиме (gpio_in / gpio_out / soft_pwm / adc);
+- устройство на I2C: "i2c:1@0x3c" — шина общая, адрес эксклюзивный;
+- SPI-устройство: "spi:1.0" (шина.CS) — эксклюзивно;
+- UART: "uart:ttyS3" — эксклюзивно.
+
+Шины доступны, только если их интерфейс включён в uEnv.txt; их пины при этом уже
+отданы интерфейсу (Board.function) и как GPIO недоступны.
+
+gpio_out / soft_pwm — эксклюзивно; gpio_in / adc — разделяемые (рефкаунт владельцев).
+Пакет захватов атомарен: либо все, либо ни одного.
 """
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
+from typing import Literal
 
-from pioneer.board import Board, RuntimeMode
+from pioneer.board import Board, Interface, RuntimeMode
 
-SHARED: frozenset[RuntimeMode] = frozenset({"gpio_in", "adc"})
+BusMode = Literal["i2c", "spi", "uart"]
+Mode = RuntimeMode | BusMode
+SHARED: frozenset[str] = frozenset({"gpio_in", "adc"})
+
+_I2C = re.compile(r"^i2c:(\d+)@0x([0-9a-f]{1,2})$")
+_SPI = re.compile(r"^spi:(\d+)\.(\d+)$")
+_UART = re.compile(r"^uart:(tty\w+)$")
+
+
+def i2c_id(bus: int, addr: int) -> str:
+    return f"i2c:{bus}@0x{addr:02x}"
+
+
+def spi_id(bus: int, cs: int) -> str:
+    return f"spi:{bus}.{cs}"
+
+
+def uart_id(device: str) -> str:
+    return f"uart:{device.removeprefix('/dev/')}"
 
 
 @dataclass
-class PinClaim:
-    pin: str
-    mode: RuntimeMode
+class Claim:
+    resource: str
+    mode: Mode
     owners: dict[str, str] = field(default_factory=dict)  # owner id -> человекочитаемое имя
 
 
@@ -29,56 +56,106 @@ class ResourceConflict(Exception):
 class ResourceManager:
     def __init__(self, board: Board):
         self.board = board
-        self.claims: dict[str, PinClaim] = {}
+        self.claims: dict[str, Claim] = {}
         self._lock = threading.Lock()
 
-    def check(self, owner: str, pin_id: str, mode: RuntimeMode) -> None:
-        board = self.board
-        pin = board.pin(pin_id)
-        if mode not in board.runtime_modes(pin_id):
-            func = board.function(pin_id)
-            if func in board.interfaces:
-                iface = board.interfaces[func]
-                role = iface.pins[pin_id]
-                raise ResourceConflict(
-                    f"{pin_id} отдан интерфейсу {iface.title} ({role}); чтобы использовать как "
-                    f"{mode}, выключите {iface.title} в uEnv.txt и перезагрузите плату")
-            raise ResourceConflict(f"{pin_id} ({pin.name or pin.kind}) не поддерживает режим {mode}")
-        claim = self.claims.get(pin_id)
+    # ---- проверки
+    def check(self, owner: str, resource: str, mode: Mode) -> None:
+        if ":" in resource:
+            self._check_bus(resource, mode)
+        else:
+            self._check_pin(resource, mode)
+        claim = self.claims.get(resource)
         if claim is None or owner in claim.owners and len(claim.owners) == 1:
             return
         if claim.mode == mode and mode in SHARED:
             return
         holders = ", ".join(f'"{n}"' for o, n in claim.owners.items() if o != owner)
-        raise ResourceConflict(f"{pin_id} занят ({claim.mode}): {holders}")
+        raise ResourceConflict(f"{resource} занят ({claim.mode}): {holders}")
 
-    def claim_many(self, owner: str, owner_name: str, wants: dict[str, RuntimeMode]) -> None:
+    def _check_pin(self, pin_id: str, mode: Mode) -> None:
+        board = self.board
+        pin = board.pin(pin_id)
+        if mode in board.runtime_modes(pin_id):
+            return
+        func = board.function(pin_id)
+        if func in board.interfaces:
+            iface = board.interfaces[func]
+            raise ResourceConflict(
+                f"{pin_id} отдан интерфейсу {iface.title} ({iface.pins[pin_id]}); чтобы использовать как "
+                f"{mode}, выключите {iface.title} в uEnv.txt и перезагрузите плату")
+        raise ResourceConflict(f"{pin_id} ({pin.name or pin.kind}) не поддерживает режим {mode}")
+
+    def _check_bus(self, resource: str, mode: Mode) -> None:
+        if m := _I2C.match(resource):
+            self._need(mode, "i2c", resource)
+            bus, addr = int(m[1]), int(m[2], 16)
+            if not 0x03 <= addr <= 0x77:
+                raise ResourceConflict(f"{resource}: адрес I2C 0x03…0x77")
+            self._enabled_iface(lambda i: i.device == f"/dev/i2c-{bus}", f"I2C-шина {bus}")
+        elif m := _SPI.match(resource):
+            self._need(mode, "spi", resource)
+            bus, cs = int(m[1]), int(m[2])
+            iface = self._enabled_iface(lambda i: i.id == f"spi{bus}", f"SPI{bus}")
+            cs_roles = {r for r in iface.pins.values() if r.startswith("CSN")}
+            if f"CSN{cs}" not in cs_roles:
+                raise ResourceConflict(f"{resource}: на гребёнке выведены только {', '.join(sorted(cs_roles))}")
+        elif m := _UART.match(resource):
+            self._need(mode, "uart", resource)
+            iface = self._enabled_iface(lambda i: i.device == f"/dev/{m[1]}", m[1])
+            if iface.locked:
+                raise ResourceConflict(f"{m[1]} — {iface.title}, занят системой")
+        else:
+            raise ResourceConflict(f"неизвестный ресурс {resource!r}")
+
+    @staticmethod
+    def _need(mode: Mode, expected: str, resource: str) -> None:
+        if mode != expected:
+            raise ResourceConflict(f"{resource}: режим должен быть {expected}, а не {mode}")
+
+    def _enabled_iface(self, match, what: str) -> Interface:
+        candidates = [i for i in self.board.interfaces.values() if match(i)]
+        for i in candidates:
+            if self.board.interface_enabled(i.id):
+                return i
+        if not candidates:
+            raise ResourceConflict(f"{what}: нет на гребёнке Napi-C")
+        names = " или ".join(i.title for i in candidates)
+        raise ResourceConflict(f"{what} выключена: включите {names} в uEnv.txt и перезагрузите плату")
+
+    # ---- захват
+    def claim_many(self, owner: str, owner_name: str, wants: dict[str, Mode]) -> None:
         with self._lock:
             errors = []
-            for pin_id, mode in wants.items():
+            for res, mode in wants.items():
                 try:
-                    self.check(owner, pin_id, mode)
-                except (ResourceConflict, KeyError) as e:
-                    errors.append(str(e).strip("'\""))
+                    self.check(owner, res, mode)
+                except ResourceConflict as e:
+                    errors.append(str(e))
+                except KeyError as e:  # нет такого пина
+                    errors.append(e.args[0])
             if errors:
                 raise ResourceConflict("; ".join(errors))
-            for pin_id, mode in wants.items():
-                claim = self.claims.get(pin_id)
+            for res, mode in wants.items():
+                claim = self.claims.get(res)
                 if claim is None or claim.mode != mode:  # смена режима единственным владельцем
-                    claim = self.claims[pin_id] = PinClaim(pin_id, mode)
+                    claim = self.claims[res] = Claim(res, mode)
                 claim.owners[owner] = owner_name
 
-    def claim(self, owner: str, owner_name: str, pin_id: str, mode: RuntimeMode) -> None:
-        self.claim_many(owner, owner_name, {pin_id: mode})
+    def claim(self, owner: str, owner_name: str, resource: str, mode: Mode) -> None:
+        self.claim_many(owner, owner_name, {resource: mode})
 
-    def release(self, owner: str, pin_id: str | None = None) -> list[str]:
-        """Освободить пин (или все пины владельца). Возвращает пины, ставшие свободными."""
+    def release(self, owner: str, resource: str | None = None) -> list[str]:
+        """Освободить ресурс (или все ресурсы владельца). Возвращает ставшие свободными."""
         freed = []
         with self._lock:
-            for pid, claim in list(self.claims.items()):
-                if (pin_id is None or pid == pin_id) and owner in claim.owners:
+            for rid, claim in list(self.claims.items()):
+                if (resource is None or rid == resource) and owner in claim.owners:
                     del claim.owners[owner]
                     if not claim.owners:
-                        del self.claims[pid]
-                        freed.append(pid)
+                        del self.claims[rid]
+                        freed.append(rid)
         return freed
+
+    def owned_by(self, owner: str) -> list[str]:
+        return [rid for rid, c in self.claims.items() if owner in c.owners]

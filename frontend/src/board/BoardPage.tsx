@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Board, PinState } from "../api";
+import type { BenchModel, Board, PinState } from "../api";
 import { BoardSvg } from "./BoardSvg";
 import { ifaceShort } from "./look";
 import { PinInspector } from "./PinInspector";
@@ -19,10 +19,12 @@ const LEGEND: [string, string, string][] = [
 interface Props {
   board: Board;
   live: Record<string, PinState>;
+  bench: Record<string, BenchModel>;
   onError: (msg: string) => void;
 }
 
-export function BoardPage({ board, live, onError }: Props) {
+export function BoardPage({ board, live, bench, onError }: Props) {
+  const models = Object.values(bench);
   const [selected, setSelected] = useState<string | null>("J9-7");
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const pin = board.pins.find((p) => p.id === selected);
@@ -32,7 +34,7 @@ export function BoardPage({ board, live, onError }: Props) {
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
       <main className="flex min-w-0 flex-1 flex-col gap-5 overflow-auto p-5">
         <div className="rounded-lg border border-line bg-panel p-5">
-          <BoardSvg board={board} live={live} selected={selected} highlight={highlight} onSelect={setSelected} />
+          <BoardSvg board={board} live={live} bench={models} selected={selected} highlight={highlight} onSelect={setSelected} />
         </div>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted">
@@ -64,7 +66,7 @@ export function BoardPage({ board, live, onError }: Props) {
 
       <aside className="w-full shrink-0 overflow-auto border-t border-line bg-panel p-5 lg:w-[360px] lg:border-t-0 lg:border-l">
         {pin ? (
-          <PinInspector board={board} pin={pin} live={live[pin.id]} onError={onError} onHighlight={hl} />
+          <PinInspector board={board} pin={pin} live={live[pin.id]} bench={models} onError={onError} onHighlight={hl} />
         ) : (
           <p className="text-muted">Выберите пин на схеме.</p>
         )}

@@ -8,34 +8,42 @@ from __future__ import annotations
 import threading
 import time
 
-from pioneer.hal.base import OutputLine, try_realtime
+from pioneer.hal.base import OutputLine, PwmLine, try_realtime
 
 MAX_FREQ = 500.0
 
 
-class SoftPwm:
+def check_pwm(freq: float | None, duty: float | None) -> None:
+    if freq is not None and not 0 < freq <= MAX_FREQ:
+        raise ValueError(f"частота soft-PWM 0…{MAX_FREQ:g} Гц")
+    if duty is not None and not 0.0 <= duty <= 1.0:
+        raise ValueError("скважность 0…1")
+
+
+class SoftPwm(PwmLine):
     def __init__(self, line: OutputLine, freq: float = 100.0, duty: float = 0.0):
         self.line = line
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        self.freq, self.duty = 100.0, 0.0
         self.set(freq, duty)
         self.realtime = False
         self._thread = threading.Thread(target=self._run, name="pioneer-softpwm", daemon=True)
         self._thread.start()
 
     def set(self, freq: float | None = None, duty: float | None = None) -> None:
+        check_pwm(freq, duty)
         with self._lock:
             if freq is not None:
-                if not 0 < freq <= MAX_FREQ:
-                    raise ValueError(f"частота soft-PWM 0…{MAX_FREQ:g} Гц")
                 self.freq = float(freq)
             if duty is not None:
-                self.duty = min(max(float(duty), 0.0), 1.0)
+                self.duty = float(duty)
 
-    def stop(self, safe_value: bool = False) -> None:
+    def close(self, safe_value: bool = False) -> None:
         self._stop.set()
         self._thread.join(timeout=1)
         self.line.write(safe_value)
+        self.line.close()
 
     def _run(self) -> None:
         self.realtime = try_realtime()

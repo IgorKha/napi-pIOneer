@@ -9,14 +9,14 @@ from pioneer.config import Config
 
 @pytest.fixture
 def client(tmp_path):
-    cfg = Config(hal="mock", uenv_file=Path("/nonexistent"), data_dir=tmp_path)
+    cfg = Config(hal="bench", uenv_file=Path("/nonexistent"), data_dir=tmp_path)
     with TestClient(create_app(cfg)) as c:
         yield c
 
 
 def test_board(client):
     r = client.get(f"{API}/board").json()
-    assert r["hal"] == "mock"
+    assert r["hal"] == "bench"
     pins = {p["id"]: p for p in r["pins"]}
     assert pins["J9-7"]["runtime_modes"] == ["gpio_in", "gpio_out", "soft_pwm"]
     assert pins["J9-11"]["function"] == "i2c3_m0"
@@ -25,12 +25,14 @@ def test_board(client):
     assert ifaces["uart4"]["enabled"] is False and ifaces["i2c1"]["enabled"] is True
 
 
-def test_manual_out_and_mock_in(client):
+def test_manual_out_and_bench_in(client):
     r = client.post(f"{API}/board/pins/J9-7/manual", json={"mode": "gpio_out", "value": True})
     assert r.status_code == 200 and r.json()["value"] is True
 
     assert client.post(f"{API}/board/pins/J9-12/manual", json={"mode": "gpio_in"}).status_code == 200
-    client.post(f"{API}/mock/pins/J9-12", json={"value": True})
+    r = client.post(f"{API}/bench/models", json={"kind": "level", "id": "ext", "config": {"pin": "J9-12"}})
+    assert r.status_code == 200
+    client.post(f"{API}/bench/models/ext/actions/set", json={"value": True})
     pins = {p["id"]: p for p in client.get(f"{API}/board").json()["pins"]}
     assert pins["J9-12"]["value"] is True
     assert pins["J9-7"]["claim"]["mode"] == "gpio_out"
@@ -61,3 +63,18 @@ def test_ws_snapshot_and_updates(client):
         msg = ws.receive_json()
         assert msg["pins"]["J9-7"] == {"value": True,
                                        "claim": {"mode": "gpio_out", "owners": {"manual": "Ручное управление"}}}
+
+
+def test_bench_api(client, tmp_path):
+    r = client.get(f"{API}/bench").json()
+    assert r["enabled"] is True and {k["kind"] for k in r["kinds"]} >= {"level", "wire", "button", "led"}
+    assert client.post(f"{API}/bench/models", json={"kind": "button", "id": "b",
+                                                     "config": {"pin": "J10-2"}}).status_code == 200
+    assert client.post(f"{API}/bench/models", json={"kind": "led", "config": {"pin": "J9-1"}}).status_code == 422
+    r = client.post(f"{API}/bench/models/b/actions/press", json={})
+    assert r.status_code == 200 and r.json()["pressed"] is True
+    assert client.post(f"{API}/bench/models/b/actions/fly", json={}).status_code == 422
+    assert client.post(f"{API}/bench/models/zz/actions/press", json={}).status_code == 404
+    assert (tmp_path / "bench.json").exists()
+    assert client.delete(f"{API}/bench/models/b").status_code == 200
+    assert client.get(f"{API}/bench").json()["models"] == []

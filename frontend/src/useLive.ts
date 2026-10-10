@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
-import type { PinState } from "./api";
+import type { BenchModel, PinState } from "./api";
 
 export type LiveStatus = "connecting" | "open" | "closed";
 
-/** Подписка на /pioneer/ws: состояние пинов (value + claim), с переподключением. */
-export function useLivePins() {
+/** Подписка на /pioneer/ws: состояние пинов и моделей стенда, с переподключением. */
+export function useLive(initialBench: BenchModel[] | null) {
   const [pins, setPins] = useState<Record<string, PinState>>({});
+  const [bench, setBench] = useState<Record<string, BenchModel>>({});
   const [status, setStatus] = useState<LiveStatus>("connecting");
+
+  useEffect(() => {
+    if (initialBench) setBench(Object.fromEntries(initialBench.map((m) => [m.id, m])));
+  }, [initialBench]);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -21,6 +26,10 @@ export function useLivePins() {
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === "pins") setPins((prev) => ({ ...prev, ...msg.pins }));
+        if (msg.type === "bench") {
+          const upd = Object.fromEntries((msg.models as BenchModel[]).map((m) => [m.id, m]));
+          setBench((prev) => (msg.full ? upd : { ...prev, ...upd }));
+        }
       };
       ws.onclose = () => {
         setStatus("closed");
@@ -35,5 +44,5 @@ export function useLivePins() {
     };
   }, []);
 
-  return { pins, status };
+  return { pins, bench, status };
 }

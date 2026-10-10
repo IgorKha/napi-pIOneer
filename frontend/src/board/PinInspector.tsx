@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type Board, type InterfacePlan, type Pin, type PinState, type RuntimeMode } from "../api";
+import { api, type BenchModel, type Board, type InterfacePlan, type Pin, type PinState, type RuntimeMode } from "../api";
+import { BenchSection } from "./BenchSection";
 import { formatValue, ifaceShort } from "./look";
 
 const MODE_LABEL: Record<RuntimeMode, string> = {
@@ -15,11 +16,12 @@ interface Props {
   board: Board;
   pin: Pin;
   live: PinState | undefined;
+  bench: BenchModel[];
   onError: (msg: string) => void;
   onHighlight: (pins: string[]) => void;
 }
 
-export function PinInspector({ board, pin, live, onError, onHighlight }: Props) {
+export function PinInspector({ board, pin, live, bench, onError, onHighlight }: Props) {
   const st: PinState = { value: live?.value ?? pin.value, claim: live ? live.claim : pin.claim };
   const iface = board.interfaces.find((i) => i.id === pin.function);
   const run = (p: Promise<unknown>) => p.catch((e: Error) => onError(e.message));
@@ -57,7 +59,11 @@ export function PinInspector({ board, pin, live, onError, onHighlight }: Props) 
             )}
           </Section>
 
-          {pin.runtime_modes.length > 0 && <Control pin={pin} st={st} hal={board.hal} run={run} />}
+          {pin.runtime_modes.length > 0 && <Control pin={pin} st={st} run={run} />}
+
+          {board.hal === "bench" && pin.runtime_modes.length > 0 && (
+            <BenchSection board={board} pin={pin} models={bench} run={run} />
+          )}
 
           <Section title="Свойства">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
@@ -79,9 +85,7 @@ export function PinInspector({ board, pin, live, onError, onHighlight }: Props) 
   );
 }
 
-function Control({ pin, st, hal, run }: {
-  pin: Pin; st: PinState; hal: Board["hal"]; run: (p: Promise<unknown>) => void;
-}) {
+function Control({ pin, st, run }: { pin: Pin; st: PinState; run: (p: Promise<unknown>) => void }) {
   const claim = st.claim;
   const foreign = claim && Object.keys(claim.owners).some((o) => o !== MANUAL);
   const manualModes = pin.runtime_modes.filter((m): m is "gpio_in" | "gpio_out" | "adc" => m !== "soft_pwm");
@@ -121,21 +125,6 @@ function Control({ pin, st, hal, run }: {
         </>
       )}
 
-      {hal === "mock" && claim?.mode === "gpio_in" && pin.gpio && (
-        <MockBox>
-          <span>Внешний сигнал:</span>
-          <Btn onClick={() => run(api.mockLevel(pin.id, false))}>0</Btn>
-          <Btn onClick={() => run(api.mockLevel(pin.id, true))}>1</Btn>
-        </MockBox>
-      )}
-      {hal === "mock" && claim?.mode === "adc" && pin.adc_channel !== null && (
-        <MockBox>
-          <span>Напряжение:</span>
-          <input type="range" min={0} max={1.8} step={0.01} defaultValue={0} className="flex-1 accent-pin-adc"
-                 aria-label="Напряжение на входе ADC (mock)"
-                 onChange={(e) => run(api.mockAdc(pin.adc_channel!, Number(e.target.value)))} />
-        </MockBox>
-      )}
     </Section>
   );
 }
@@ -251,14 +240,5 @@ function Btn({ active, onClick, children }: { active?: boolean; onClick: () => v
               : "bg-panel-2 text-fg hover:bg-[#3a3a3a]"}`}>
       {children}
     </button>
-  );
-}
-
-function MockBox({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-3 flex items-center gap-2 rounded border border-dashed border-warn/50 px-2 py-1.5 text-xs">
-      <span className="font-semibold text-warn">mock</span>
-      {children}
-    </div>
   );
 }

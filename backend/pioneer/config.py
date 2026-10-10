@@ -16,12 +16,12 @@ BOARD_DATA_DIR = Path("/mount/rfs/rw/.pioneer/data")
 class Config:
     host: str = "127.0.0.1"
     port: int = 8100
-    hal: Literal["auto", "mock", "gpiod"] = "auto"
+    hal: Literal["auto", "bench", "linux"] = "auto"  # bench на плате — режим «всухую»
     board_file: Path = REPO_ROOT / "boards" / "napi-c.yaml"
     uenv_file: Path = Path("/boot/uEnv.txt")
     data_dir: Path = REPO_ROOT / ".devdata"
-    # Для mock: оверлеи, как в дефолтном uEnv 0.3.1 (если uenv_file не читается)
-    mock_overlays: tuple[str, ...] = (
+    # Если uenv_file не читается (Mac, тесты): оверлеи, как в дефолтном uEnv 0.3.1
+    default_overlays: tuple[str, ...] = (
         "rk3308-uart1", "rk3308-uart2-m0", "rk3308-uart3-m0", "rk3308-i2c1-ds1338",
         "rk3308-i2c3-m0", "rk3308-usb20-host",
     )

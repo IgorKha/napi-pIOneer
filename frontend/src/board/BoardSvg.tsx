@@ -1,4 +1,5 @@
-import type { Board, PinState } from "../api";
+import type { BenchModel, Board, PinState } from "../api";
+import { modelPins } from "./BenchSection";
 import { formatValue, pinLook } from "./look";
 
 const P = 26; // шаг пинов
@@ -11,16 +12,19 @@ const GAP = 48;
 interface Props {
   board: Board;
   live: Record<string, PinState>;
+  bench: BenchModel[];
   selected: string | null;
   highlight: Set<string>;
   onSelect: (pinId: string) => void;
 }
 
-export function BoardSvg({ board, live, selected, highlight, onSelect }: Props) {
+export function BoardSvg({ board, live, bench, selected, highlight, onSelect }: Props) {
   const rows = Math.max(...board.headers.map((h) => h.rows));
   const width = board.headers.length * HEADER_W + (board.headers.length - 1) * GAP;
   const height = TITLE_H + rows * P + 12;
   const byId = new Map(board.pins.map((p) => [p.id, p]));
+  const onPin = new Map<string, BenchModel[]>();
+  for (const m of bench) for (const p of modelPins(m)) onPin.set(p, [...(onPin.get(p) ?? []), m]);
 
   return (
     <svg viewBox={`0 0 ${width} ${height}`} className="w-full max-w-[860px] select-none"
@@ -73,6 +77,7 @@ export function BoardSvg({ board, live, selected, highlight, onSelect }: Props) 
                   ) : (
                     <circle cx={cx} cy={cy} r={R} fill={look.fill} stroke={look.stroke} strokeWidth={1.5} />
                   )}
+                  {onPin.has(id) && <BenchMark cx={cx + R * 0.75} cy={cy - R * 0.75} models={onPin.get(id)!} />}
                   <text x={cx} y={cy + 3} textAnchor="middle" fontSize={8.5} fill={look.text}
                         fontFamily="var(--font-mono)">{n}</text>
                   <text x={lx} y={cy + 4} textAnchor={left ? "end" : "start"} fontSize={11}
@@ -89,5 +94,17 @@ export function BoardSvg({ board, live, selected, highlight, onSelect }: Props) 
         );
       })}
     </svg>
+  );
+}
+
+/** Маркер «на пине есть устройство стенда»; горящий LED — цветом. */
+function BenchMark({ cx, cy, models }: { cx: number; cy: number; models: BenchModel[] }) {
+  const led = models.find((m) => m.kind === "led" && Number(m.state.brightness) > 0);
+  const fill = led ? String(led.config.color ?? "red") : "var(--color-warn)";
+  return (
+    <circle cx={cx} cy={cy} r={led ? 4 : 3} fill={fill} stroke="#1d1d1d" strokeWidth={1}
+            style={led ? { filter: `drop-shadow(0 0 3px ${fill})` } : undefined}>
+      <title>{models.map((m) => m.title).join(", ")}</title>
+    </circle>
   );
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type Board } from "./api";
+import { api, type BenchModel, type Board } from "./api";
 import { BoardPage } from "./board/BoardPage";
-import { useLivePins, type LiveStatus } from "./useLive";
+import { useLive, type LiveStatus } from "./useLive";
 
 const STATUS: Record<LiveStatus, [string, string]> = {
   open: ["bg-ok", "онлайн"],
@@ -13,10 +13,14 @@ export function App() {
   const [board, setBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const { pins: live, status } = useLivePins();
+  const [initialBench, setInitialBench] = useState<BenchModel[] | null>(null);
+  const { pins: live, bench, status } = useLive(initialBench);
 
   useEffect(() => {
-    api.board().then(setBoard, (e: Error) => setLoadError(e.message));
+    api.board().then((b) => {
+      setBoard(b);
+      if (b.hal === "bench") api.bench().then((r) => setInitialBench(r.models));
+    }, (e: Error) => setLoadError(e.message));
   }, []);
 
   const showError = useCallback((msg: string) => {
@@ -35,8 +39,9 @@ export function App() {
         <span className="cursor-not-allowed text-xs text-muted" title="Следующий шаг фазы 0">Скрипты</span>
         <div className="ml-auto flex items-center gap-3 text-xs text-muted">
           {board && (
-            <span className={board.hal === "mock" ? "text-warn" : undefined}>
-              {board.title} · HAL: {board.hal}
+            <span className={board.hal === "bench" ? "text-warn" : undefined}
+                  title={board.hal === "bench" ? "Виртуальный стенд: железо не трогается" : undefined}>
+              {board.title} · {board.hal === "bench" ? "стенд" : "железо"}
             </span>
           )}
           <span className="flex items-center gap-1.5">
@@ -47,7 +52,7 @@ export function App() {
       </nav>
 
       {board ? (
-        <BoardPage board={board} live={live} onError={showError} />
+        <BoardPage board={board} live={live} bench={bench} onError={showError} />
       ) : (
         <div className="p-8 text-muted">{loadError ? `Не удалось загрузить плату: ${loadError}` : "Загрузка…"}</div>
       )}
