@@ -16,8 +16,6 @@ interface Props {
   onError: (msg: string) => void;
 }
 
-let typesCache: Promise<NodeTypeSchema[]> | null = null;
-
 /** Проекты (spec 3.2, 4): список слева, редактор графа справа. */
 export function ProjectsPage({ board, selected, pinLive, live, logs, status, resetLive, onError }: Props) {
   const [list, setList] = useState<ProjectMeta[]>([]);
@@ -25,7 +23,8 @@ export function ProjectsPage({ board, selected, pinLive, live, logs, status, res
   const reload = useCallback(() => api.projects().then(setList, (e: Error) => onError(e.message)), [onError]);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
-    (typesCache ??= api.nodeTypes().then((r) => r.types)).then(setTypes, (e: Error) => { typesCache = null; onError(e.message); });
+    // каждый раз заново: свои блоки могли измениться на странице «Блоки»
+    api.nodeTypes().then((r) => setTypes(r.types), (e: Error) => onError(e.message));
   }, [onError]);
 
   useEffect(() => {

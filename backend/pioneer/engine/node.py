@@ -201,6 +201,15 @@ class NodeRegistry:
             raise ValueError(f"тип ноды {nt.key} уже зарегистрирован")
         self.types[nt.key] = nt
 
+    def copy(self) -> NodeRegistry:
+        """Реестр сервиса: встроенные + свои блоки (BUILTIN не трогаем)."""
+        r = NodeRegistry()
+        r.types = dict(self.types)
+        return r
+
+    def remove(self, key: str) -> None:
+        self.types.pop(key, None)
+
     def get(self, key: str) -> NodeType:
         try:
             return self.types[key]

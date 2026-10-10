@@ -17,12 +17,12 @@ export function parseMarkdown(md: string): Block[] {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
-    const fence = /^```(\w*)\s*(run)?\s*$/.exec(line);
+    const fence = /^```(\w*)\s*(\w+)?\s*$/.exec(line); // ```python run / ```python block
     if (fence) {
       const code: string[] = [];
       for (i++; i < lines.length && !lines[i].startsWith("```"); i++) code.push(lines[i]);
       i++;
-      out.push({ kind: "code", lang: fence[1], run: !!fence[2], code: code.join("\n") });
+      out.push({ kind: "code", lang: fence[1], run: fence[2] === "run", code: code.join("\n") });
       continue;
     }
     const h = /^(#{1,4})\s+(.*)$/.exec(line);

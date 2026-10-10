@@ -348,6 +348,18 @@ export interface ProjectLive {
   nodes: Record<string, { state: string; error: string | null }>;
 }
 
+export interface BlockMeta {
+  id: string;
+  name: string;
+  updated: number | null;
+  types: string[];
+  error: string | null;
+}
+
+export interface BlockFull extends BlockMeta {
+  code: string;
+}
+
 export const api = {
   me: () => call<{ authenticated: boolean; password_set: boolean }>("/auth/me"),
   login: (password: string) => call("/auth/login", { password }),
@@ -380,6 +392,11 @@ export const api = {
   projectLive: (id: string) => call<ProjectLive>(`/projects/${id}/live`),
   projectUi: (id: string, node: string, value: unknown) => call(`/projects/${id}/nodes/${node}/ui`, { value }),
   panic: () => call("/panic", {}),
+  blocks: () => call<BlockMeta[]>("/blocks"),
+  block: (id: string) => call<BlockFull>(`/blocks/${id}`),
+  blockCreate: (name: string) => call<BlockMeta>("/blocks", { name }),
+  blockSave: (id: string, code: string, name?: string) => call<BlockMeta>(`/blocks/${id}`, { code, name }, "PUT"),
+  blockDelete: (id: string) => call(`/blocks/${id}`, undefined, "DELETE"),
   bench: () => call<BenchInfo>("/bench"),
   benchAdd: (kind: string, config: Record<string, unknown>) =>
     call<BenchModel>("/bench/models", { kind, config }),

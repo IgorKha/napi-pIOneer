@@ -32,7 +32,7 @@ def test_reference(board):
     out_pins = {s["id"]: s for s in syms["Output"]["support"]}
     assert out_pins["J9-7"]["available"] and not out_pins["J9-11"]["available"]  # J9-11 отдан I2C3
     assert {s["id"] for s in syms["Adc"]["support"]} == {"J9-26", "J10-3"}
-    assert [g["id"] for g in ref["guides"]] == ["start", "recipes", "hardware", "errors"]
+    assert [g["id"] for g in ref["guides"]] == ["start", "recipes", "blocks", "hardware", "errors"]
     assert len(ref["nodes"]) >= 30
 
 
@@ -94,3 +94,15 @@ def test_guide_examples_run_on_bench(guide, idx, code, tmp_path, hw, bench):
 def test_help_api(client):
     r = client.get(f"{API}/help").json()
     assert r["sdk"][0]["name"] == "Input" and r["errors"]
+
+
+def test_block_guide_examples_valid(tmp_path):
+    from pioneer.help import block_examples
+    from pioneer.userblocks import extract_schema
+    blocks = [b for g in load_guides(DOCS_DIR) for b in block_examples(g["markdown"])]
+    assert len(blocks) >= 2
+    for i, code in enumerate(blocks):
+        f = tmp_path / f"b{i}.py"
+        f.write_text(code)
+        r = extract_schema(f)
+        assert r["ok"], r

@@ -244,12 +244,23 @@ class ProjectManager:
         rt = self.engine.runtimes.get(pid)
         if rt is not None:
             try:
-                st["dirty"] = rt.rev != self._read(pid)[0].rev
+                st["dirty"] = rt.rev != self._read(pid)[0].rev or self._blocks_changed(rt)
             except ProjectError:
                 st["dirty"] = False
         else:
             st["dirty"] = False
         return st
+
+    @staticmethod
+    def _blocks_changed(rt) -> bool:
+        """Код Python-блока сохранён после старта проекта — нужна «Применить»."""
+        for f, mtime in rt.block_files.items():
+            try:
+                if os.path.getmtime(f) != mtime:
+                    return True
+            except OSError:
+                return True
+        return False
 
     def manifest(self, pid: str) -> list[dict]:
         rt = self.engine.runtimes.get(pid)

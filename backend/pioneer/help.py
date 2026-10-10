@@ -24,7 +24,8 @@ from pioneer.engine.node import NodeRegistry
 DOCS_DIR = REPO_ROOT / "docs" / "sdk"
 SECTIONS = ("Args", "Returns", "Raises", "Example", "Hardware")
 # Порядок и заголовки руководств (файлы docs/sdk/<id>.md)
-GUIDES = [("start", "Начало"), ("recipes", "Рецепты"), ("hardware", "Железо"), ("errors", "Ошибки")]
+GUIDES = [("start", "Начало"), ("recipes", "Рецепты"), ("blocks", "Свои блоки"), ("hardware", "Железо"),
+          ("errors", "Ошибки")]
 
 # Режим/шина, нужные классу SDK, — по ним из платы выбираются поддерживающие пины
 SUPPORT = {"Output": ("pin", "gpio_out"), "Input": ("pin", "gpio_in"), "Pwm": ("pin", "soft_pwm"),
@@ -197,6 +198,11 @@ def slug(text: str) -> str:
 def executable_blocks(markdown: str) -> list[str]:
     """Блоки ```python run — исполняются в тестах на стенде (примеры не должны врать)."""
     return [m[1] for m in re.finditer(r"```python run\n(.*?)```", markdown, re.S)]
+
+
+def block_examples(markdown: str) -> list[str]:
+    """Блоки ```python block — проверяются в тестах (схема извлекается без ошибок)."""
+    return [m[1] for m in re.finditer(r"```python block\n(.*?)```", markdown, re.S)]
 
 
 def build_reference(board: Board | None, registry: NodeRegistry | None) -> dict:

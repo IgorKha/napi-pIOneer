@@ -6,6 +6,7 @@ import { href, useRoute } from "./route";
 // Monaco (~3 МБ) грузится только на странице скриптов
 const ScriptsPage = lazy(() => import("./scripts/ScriptsPage").then((m) => ({ default: m.ScriptsPage })));
 const ProjectsPage = lazy(() => import("./projects/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
+const BlocksPage = lazy(() => import("./blocks/BlocksPage").then((m) => ({ default: m.BlocksPage })));
 const HelpPage = lazy(() => import("./help/HelpPage").then((m) => ({ default: m.HelpPage })));
 import { Login } from "./Login";
 import { useLive, type LiveStatus } from "./useLive";
@@ -80,7 +81,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         <span className="font-semibold tracking-tight">
           napi-p<span className="text-accent">IO</span>neer
         </span>
-        {([["board", "Плата"], ["projects", "Проекты"], ["scripts", "Скрипты"], ["help", "Справка"]] as const).map(([page, title]) => (
+        {([["board", "Плата"], ["projects", "Проекты"], ["blocks", "Блоки"], ["scripts", "Скрипты"], ["help", "Справка"]] as const).map(([page, title]) => (
           <a key={page} href={href({ page })} aria-current={route.page === page ? "page" : undefined}
              className={`rounded px-2.5 py-1 text-xs ${route.page === page ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>
             {title}
@@ -113,6 +114,10 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
                           status={projectStatus} resetLive={resetProjectLive} onError={showError} />
           </Suspense>
         ) : <div className="p-8 text-muted">Загрузка…</div>
+      ) : route.page === "blocks" ? (
+        <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
+          <BlocksPage board={liveBoard} selected={route.id} onError={showError} />
+        </Suspense>
       ) : route.page === "help" ? (
         <Suspense fallback={<div className="p-8 text-muted">Загрузка…</div>}>
           <HelpPage section={route.section} anchor={route.anchor} />

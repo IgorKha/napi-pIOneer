@@ -147,6 +147,8 @@ class ProjectRuntime:
         self.started: float | None = None
         self.errors: dict[str, _NodeError] = {}
         self.views: dict[str, dict] = {}
+        self._blockhost = None  # процесс Python-блоков проекта (по требованию)
+        self.block_files: dict[str, float] = {}  # файл блока -> mtime при старте («граф изменён»)
         # live (читается из потока LiveHub)
         self._live_lock = threading.Lock()
         self._live_values: dict[str, dict] = {}
@@ -207,6 +209,13 @@ class ProjectRuntime:
         self._teardown()
         self.log("остановлен")
 
+    def blockhost(self):
+        """Worker-процесс Python-блоков этого проекта (создаётся первой нодой-блоком)."""
+        if self._blockhost is None:
+            from pioneer.userblocks import open_blockhost
+            self._blockhost = open_blockhost(self)
+        return self._blockhost
+
     def _teardown(self) -> None:
         for nid in reversed(self.order):
             node = self.nodes[nid]
@@ -214,6 +223,9 @@ class ProjectRuntime:
                 node.stop()
             except Exception as e:  # стоп не должен застревать на одной ноде
                 self.log(f"{node.title}: ошибка при остановке: {_err_text(e)}", node=node, level="error")
+        if self._blockhost is not None:
+            self._blockhost.close()
+            self._blockhost = None
         self.engine.hw.release(self.owner, safe_value=False)
 
     # ---- волна
