@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import auth, bench, board
+from pioneer.api import auth, bench, board, scripts
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
@@ -16,6 +16,7 @@ from pioneer.config import REPO_ROOT, Config, load_config
 from pioneer.hal import BenchHAL, create_hal
 from pioneer.hw import HW
 from pioneer.resources import ResourceManager
+from pioneer.scripts import ScriptManager
 
 API = "/pioneer/api"
 FRONTEND_DIST = REPO_ROOT / "frontend" / "dist"
@@ -41,8 +42,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.live = live = LiveHub(b, app.state.hw)
         if isinstance(hal, BenchHAL):
             hal.on_change(live.mark_bench)
+        app.state.scripts = sm = ScriptManager(cfg.data_dir, app.state.hw)
+        sm.on_pins = live.mark
+        live.add_source(sm.drain)
         live.start()
+        sm.start_autostart()
         yield
+        sm.stop_all()
         await live.stop()
         app.state.hw.close_all(safe_value=False)
         hal.close()
@@ -55,6 +61,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     protected = APIRouter(dependencies=[Depends(auth.require_session)])
     protected.include_router(board.router)
     protected.include_router(bench.router)
+    protected.include_router(scripts.router)
     app.include_router(public, prefix=API)
     app.include_router(protected, prefix=API)
 

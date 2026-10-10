@@ -30,7 +30,11 @@ class LiveHub:
         self._lock = threading.Lock()
         self._last: dict[str, dict] = {}
         self._task: asyncio.Task | None = None
+        self._sources: list = []  # () -> list[dict]: доп. сообщения (логи/статусы скриптов)
         hw.watch(lambda pin_id, ev: self.mark(pin_id))
+
+    def add_source(self, drain) -> None:
+        self._sources.append(drain)
 
     def mark(self, *pin_ids: str) -> None:
         """Потокобезопасно: вызывается и из потока HAL."""
@@ -100,6 +104,8 @@ class LiveHub:
             if None not in bench_dirty:
                 models = [m for m in models if m["id"] in bench_dirty]
             msgs.append({"type": "bench", "full": None in bench_dirty, "models": models})
+        for drain in self._sources:
+            msgs += drain()
         if msgs and self.clients:
             await self._send(msgs)
 
