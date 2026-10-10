@@ -1,0 +1,285 @@
+# Napi-C (RK3308), NapiLinux 0.3.x.
+# Источник: .claude/skills/napi-c/pinout.md; default_pull/drive_ma сняты с платы
+# из pinconf-pins 2026-10-11 (подтяжка софтом не меняется — см. спеку, раздел 2).
+#
+# Режимы пина двух видов (spec 3.1a):
+#  - рантайм (gpio_in / gpio_out / soft_pwm / adc) — выводятся кодом из gpio/adc_channel,
+#    переключаются без перезагрузки;
+#  - интерфейсы (раздел interfaces ниже) — pinmux через DT-оверлей, переключаются
+#    правкой uEnv.txt + reboot. Конфликты интерфейсов вычисляются по общим пинам.
+
+id: napi-c
+title: Napi-C
+headers:
+  J9: { rows: 13, cols: 2, pin1: top-left }
+  J10: { rows: 13, cols: 2, pin1: top-left }
+adc:
+  device: iio:device0   # ff1e0000.saradc
+  vref: 1.8
+  bits: 10
+
+pins:
+  # ---------------------------------------------------------------- J9
+  - { id: J9-1, power: 3v3 }
+  - { id: J9-2, power: 5v }
+  - id: J9-3
+    name: GPIO0_B3
+    gpio: { chip: 0, line: 11 }
+    default_pull: none
+    drive_ma: 2
+  - { id: J9-4, power: 5v }
+  - id: J9-5
+    name: GPIO0_B4
+    gpio: { chip: 0, line: 12 }
+    default_pull: none
+    drive_ma: 2
+  - { id: J9-6, power: gnd }
+  - id: J9-7
+    name: GPIO2_A4
+    gpio: { chip: 2, line: 4 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_MCLK]
+  - id: J9-8
+    name: GPIO2_A1
+    gpio: { chip: 2, line: 1 }
+    default_pull: up
+    drive_ma: 2
+  - { id: J9-9, power: gnd }
+  - id: J9-10
+    name: GPIO2_A0
+    gpio: { chip: 2, line: 0 }
+    default_pull: up
+    drive_ma: 2
+  - id: J9-11
+    name: GPIO0_B7
+    gpio: { chip: 0, line: 15 }
+    default_pull: none
+    drive_ma: 2
+  - id: J9-12
+    name: GPIO2_A5
+    gpio: { chip: 2, line: 5 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SCLK_TX]
+  - id: J9-13
+    name: GPIO0_C0
+    gpio: { chip: 0, line: 16 }
+    default_pull: none
+    drive_ma: 2
+  - { id: J9-14, power: gnd }
+  - id: J9-15
+    name: GPIO0_C1
+    gpio: { chip: 0, line: 17 }
+    default_pull: down
+    drive_ma: 2
+    alt: [SPDIF_TX]
+  - id: J9-16
+    name: GPIO2_B2
+    gpio: { chip: 2, line: 10 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDO1]
+  - { id: J9-17, power: 3v3 }
+  - id: J9-18
+    name: GPIO2_B1
+    gpio: { chip: 2, line: 9 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDO0]
+  - id: J9-19
+    name: GPIO1_C7
+    gpio: { chip: 1, line: 23 }
+    default_pull: up
+    drive_ma: 2
+  - { id: J9-20, power: gnd }
+  - id: J9-21
+    name: GPIO1_C6
+    gpio: { chip: 1, line: 22 }
+    default_pull: up
+    drive_ma: 2
+  - id: J9-22
+    name: GPIO2_A7
+    gpio: { chip: 2, line: 7 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_LRCK_TX]
+  - id: J9-23
+    name: GPIO1_D0
+    gpio: { chip: 1, line: 24 }
+    default_pull: up
+    drive_ma: 2
+  - id: J9-24
+    name: GPIO1_D1
+    gpio: { chip: 1, line: 25 }
+    default_pull: up
+    drive_ma: 2
+  - { id: J9-25, power: gnd }
+  - id: J9-26
+    name: ADC_IN0
+    adc_channel: 0
+
+
+  # ---------------------------------------------------------------- J10
+  - { id: J10-1, power: gnd }
+  - id: J10-2
+    name: GPIO2_B5
+    gpio: { chip: 2, line: 13 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDI0, PDM_SDI0]
+  - id: J10-3
+    name: ADC_IN1
+    adc_channel: 1
+  - id: J10-4
+    name: GPIO2_B6
+    gpio: { chip: 2, line: 14 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDI1, PDM_SDI1]
+  - id: J10-5
+    name: GPIO4_B1
+    gpio: { chip: 4, line: 9 }
+    default_pull: up
+    drive_ma: 2
+  - id: J10-6
+    name: GPIO2_B7
+    gpio: { chip: 2, line: 15 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDI2, PDM_SDI2]
+  - id: J10-7
+    name: GPIO4_B0
+    gpio: { chip: 4, line: 8 }
+    default_pull: up
+    drive_ma: 2
+  - id: J10-8
+    name: GPIO2_C0
+    gpio: { chip: 2, line: 16 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDI3, PDM_SDI3]
+  - { id: J10-9, special: RESET_in }
+  - { id: J10-10, special: USB0_DP }
+  - { id: J10-11, power: 5v, note: USB0_VCC5V0 out }
+  - { id: J10-12, special: USB0_DM }
+  - id: J10-13
+    name: GPIO3_B5
+    gpio: { chip: 3, line: 13 }
+    default_pull: up
+    drive_ma: 8
+  - id: J10-14
+    name: GPIO3_B4
+    gpio: { chip: 3, line: 12 }
+    default_pull: up
+    drive_ma: 8
+  - id: J10-15
+    name: GPIO3_B3
+    gpio: { chip: 3, line: 11 }
+    default_pull: down
+    drive_ma: 8
+  - id: J10-16
+    name: GPIO3_B2
+    gpio: { chip: 3, line: 10 }
+    default_pull: up
+    drive_ma: 8
+  - id: J10-17
+    name: GPIO2_B4
+    gpio: { chip: 2, line: 12 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDO2]
+  - id: J10-18
+    name: GPIO2_B3
+    gpio: { chip: 2, line: 11 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SDO3]
+  - id: J10-19
+    name: GPIO2_B0
+    gpio: { chip: 2, line: 8 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_LRCK_RX]
+  - id: J10-20
+    name: GPIO2_A6
+    gpio: { chip: 2, line: 6 }
+    default_pull: down
+    drive_ma: 2
+    alt: [I2S0_SCLK_RX, PDM_CLK]
+  - { id: J10-21, power: gnd }
+  - { id: J10-22, power: gnd }
+  - { id: J10-23, power: gnd }
+  - { id: J10-24, power: gnd }
+  - { id: J10-25, power: 5v }
+  - { id: J10-26, power: 5v }
+
+# ------------------------------------------------------------------ interfaces
+# overlays: интерфейс включён, если в uEnv `overlays=` есть имя из списка или
+#   имя + "-<суффикс>" (rk3308-i2c1-ds1338, rk3308-spi1-w5500).
+# locked: нельзя выключить (консоль).
+# Оверлеи без пинов на гребёнке (uart2-m1, uart3-m1, usb20-host, ...) здесь не описаны.
+interfaces:
+  uart0:
+    title: UART0 (консоль)
+    overlays: [rk3308-uart0]
+    device: /dev/ttyS0
+    locked: true
+    pins: { J9-8: TX, J9-10: RX }
+  uart1:
+    title: UART1
+    overlays: [rk3308-uart1]
+    device: /dev/ttyS1
+    pins: { J9-24: TX, J9-23: RX }
+  uart2_m0:
+    title: UART2 m0
+    overlays: [rk3308-uart2-m0]
+    device: /dev/ttyS2
+    note: на ttyS2 по умолчанию висит serial-getty@ttyS2
+    pins: { J9-19: TX, J9-21: RX }
+  uart3_m0:
+    title: UART3 m0
+    overlays: [rk3308-uart3-m0]
+    device: /dev/ttyS3
+    pins: { J10-13: TX, J10-14: RX }
+  uart4:
+    title: UART4
+    overlays: [rk3308-uart4]
+    device: /dev/ttyS4
+    pins: { J10-5: TX, J10-7: RX }
+  i2c0:
+    title: I2C0
+    overlays: [rk3308-i2c0]
+    device: /dev/i2c-0
+    pins: { J9-23: SDA, J9-24: SCL }
+  i2c1:
+    title: I2C1
+    overlays: [rk3308-i2c1]
+    device: /dev/i2c-1
+    pins: { J9-3: SDA, J9-5: SCL }
+  i2c3_m0:
+    title: I2C3 m0
+    overlays: [rk3308-i2c3-m0]
+    device: /dev/i2c-3
+    pins: { J9-11: SDA, J9-13: SCL }
+  i2c3_m1:
+    title: I2C3 m1
+    overlays: [rk3308-i2c3-m1]
+    device: /dev/i2c-3
+    pins: { J10-14: SDA, J10-13: SCL }
+  spi1:
+    title: SPI1
+    overlays: [rk3308-spi1]
+    pins: { J10-14: MOSI, J10-16: MISO, J10-15: CLK, J10-13: CSN0 }
+  spi2:
+    title: SPI2
+    overlays: [rk3308-spi2]
+    pins: { J9-19: MOSI, J9-21: MISO, J9-23: CLK, J9-24: CSN0 }
+  pwm2:
+    title: PWM2 (аппаратный)
+    overlays: [rk3308-pwm2]
+    pins: { J9-11: PWM }
+  pwm3:
+    title: PWM3 (аппаратный)
+    overlays: [rk3308-pwm3]
+    pins: { J9-13: PWM }

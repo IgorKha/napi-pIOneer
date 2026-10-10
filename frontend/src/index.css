@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Тёмная тема в духе Blender / мокапов (spec 4). */
+@theme {
+  --color-bg: #1d1d1d;
+  --color-panel: #282828;
+  --color-panel-2: #303030;
+  --color-line: #3d3d3d;
+  --color-fg: #e6e6e6;
+  --color-muted: #9a9a9a;
+  --color-accent: #4772b3;
+  --color-ok: #5cc26b;
+  --color-warn: #e8a33d;
+  --color-err: #e05555;
+
+  /* пины */
+  --color-pin-free: #5a5a5a;
+  --color-pin-high: #6bdc7a;
+  --color-pin-out: #4772b3;
+  --color-pin-in: #2f9e8f;
+  --color-pin-iface: #8e6bd6;
+  --color-pin-5v: #d9534f;
+  --color-pin-3v3: #e8a33d;
+  --color-pin-gnd: #141414;
+  --color-pin-adc: #3fb5a6;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}

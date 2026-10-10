@@ -1,0 +1,23 @@
+[project]
+name = "napi-pioneer"
+version = "0.0.1"
+description = "Визуальное программирование Napi-C: node-граф + Python, исполнение на плате"
+requires-python = ">=3.12"
+# Версии = системные пакеты NapiLinux 0.3.1 (на плату ничего не ставим через pip)
+dependencies = [
+    "fastapi==0.111.0",
+    "starlette==0.37.2",
+    "pydantic==2.8.2",
+    "uvicorn==0.30.1",
+    "PyYAML==6.0.1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

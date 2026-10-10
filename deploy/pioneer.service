@@ -1,0 +1,17 @@
+[Unit]
+Description=napi-pioneer core
+After=network.target
+
+[Service]
+Type=simple
+Environment=PYTHONPATH=/mount/rfs/rw/.pioneer/app/backend
+Environment=PIONEER_CONFIG=/mount/rfs/rw/.pioneer/data/config.toml
+ExecStart=/usr/bin/python3 -m pioneer
+WorkingDirectory=/mount/rfs/rw/.pioneer/app
+Restart=on-failure
+RestartSec=2
+# soft-PWM и чтение edge-событий — SCHED_FIFO (spec 11.1)
+LimitRTPRIO=99
+
+[Install]
+WantedBy=multi-user.target
