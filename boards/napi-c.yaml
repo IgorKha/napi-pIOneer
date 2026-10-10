@@ -11,7 +11,7 @@
 id: napi-c
 title: Napi-C
 headers:
-  J9: { rows: 13, cols: 2, pin1: top-left }
+  J9: { rows: 13, cols: 2, pin1: bottom-right }  # на плате развёрнут на 180°: pin 1 (+3V3) снизу справа
   J10: { rows: 13, cols: 2, pin1: top-left }
 adc:
   device: iio:device0   # ff1e0000.saradc

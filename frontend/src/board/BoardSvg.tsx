@@ -47,9 +47,12 @@ export function BoardSvg({ board, live, bench, selected, highlight, onSelect }: 
               if (!pin) return null;
               const st = { ...pin, ...live[id] };
               const look = pinLook(board, pin, st);
-              const left = i % 2 === 0;
+              // pin1 top-left: нечётные слева, счёт сверху; bottom-right (J9, развёрнут на 180°) — наоборот
+              const flipped = h.pin1 === "bottom-right";
+              const left = (i % 2 === 0) !== flipped;
+              const row = flipped ? h.rows - 1 - Math.floor(i / 2) : Math.floor(i / 2);
               const cx = left ? cxL : cxR;
-              const cy = TITLE_H + Math.floor(i / 2) * P;
+              const cy = TITLE_H + row * P;
               const value = formatValue(st);
               const isSel = selected === id;
               const isHl = highlight.has(id);
