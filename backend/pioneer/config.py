@@ -19,6 +19,7 @@ class Config:
     hal: Literal["auto", "bench", "linux"] = "auto"  # bench на плате — режим «всухую»
     board_file: Path = REPO_ROOT / "boards" / "napi-c.yaml"
     uenv_file: Path = Path("/boot/uEnv.txt")
+    dt_dir: Path = Path("/proc/device-tree")  # живой DT; нет (Mac) — занятость по uEnv
     data_dir: Path = REPO_ROOT / ".devdata"
     # Если uenv_file не читается (Mac, тесты): оверлеи, как в дефолтном uEnv 0.3.1
     default_overlays: tuple[str, ...] = (

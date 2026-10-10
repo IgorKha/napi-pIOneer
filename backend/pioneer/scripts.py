@@ -107,8 +107,8 @@ class _Runner:
                 self.mgr._log(self.meta.id, "sys", f"не остановился за {STOP_TIMEOUT_S:g} с — SIGKILL")
                 os.killpg(self.proc.pid, signal.SIGKILL)
                 self.proc.wait()
-            except ProcessLookupError:
-                pass
+            except (ProcessLookupError, PermissionError):
+                pass  # уже вышел (на macOS killpg группы с зомби-лидером даёт EPERM)
 
     def _wait(self) -> None:
         code = self.proc.wait()
@@ -198,6 +198,14 @@ class _Runner:
             return None
         if op == "uart_read":
             return self.handles[a["h"]].read(a["max"], a["timeout"]).hex()
+        if op == "led_open":
+            h = self._handle_id(hw.led(o, n, a["led"]))
+            self.mgr.on_leds()
+            return h
+        if op == "led":
+            led = self.handles[a["h"]]
+            led.set_trigger(a["trigger"]) if "trigger" in a else led.set(a["on"])
+            return None
         raise ValueError(f"неизвестная операция {op!r}")
 
     def _owns(self, pin: str) -> None:
@@ -230,6 +238,7 @@ class ScriptManager:
         self._dropped: dict[str, int] = {}
         self._status_dirty: set[str] = set()
         self.on_pins = lambda *pins: None  # LiveHub.mark — обновить уровни на странице платы
+        self.on_leds = lambda: None  # LiveHub.mark_leds
 
     # ---- хранилище
     def _paths(self, sid: str) -> tuple[Path, Path]:
@@ -367,3 +376,4 @@ class ScriptManager:
                 del self._runners[sid]
             self._set_status(sid, st)
         self.on_pins(*[p for p in self.hw.board.pins])  # захваты сняты — обновить плату
+        self.on_leds()

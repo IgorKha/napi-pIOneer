@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING
 
 from pioneer.board import Board, GpioRef
 from pioneer.hal.base import (
-    HAL, I2C_NACK_ERRNO, EdgeCallback, EdgeEvent, EdgeMode, I2CBus, InputLine, OutputLine, PwmLine,
-    SPIDevice, UARTPort,
+    HAL, I2C_NACK_ERRNO, EdgeCallback, EdgeEvent, EdgeMode, I2CBus, InputLine, LedLine, LineBusy,
+    OutputLine, PwmLine, SPIDevice, UARTPort,
 )
 from pioneer.hal.softpwm import check_pwm
 
@@ -36,10 +36,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 CORE = "core"  # источник изменений: выход core
-
-
-class LineBusy(OSError):
-    pass
 
 
 class BenchError(ValueError):
@@ -208,6 +204,25 @@ class _UART(UARTPort):
             self._cond.notify_all()
 
 
+LED_TRIGGERS = ["none", "timer", "oneshot", "heartbeat", "default-on", "mmc0", "mmc1"]
+
+
+class _Led(LedLine):
+    def __init__(self, bench: BenchHAL, sysfs: str, default_trigger: str):
+        self.bench, self.sysfs, self.default = bench, sysfs, default_trigger
+
+    def set(self, on: bool) -> None:
+        self.bench._leds[self.sysfs] = {"trigger": "none", "on": bool(on)}
+
+    def set_trigger(self, trigger: str) -> None:
+        if trigger not in LED_TRIGGERS:
+            raise ValueError(f"нет триггера {trigger!r}")
+        self.bench._leds[self.sysfs] = {"trigger": trigger, "on": False}
+
+    def close(self) -> None:
+        self.bench._leds[self.sysfs] = {"trigger": self.default, "on": False}
+
+
 # ---------------------------------------------------------------- стенд
 class BenchHAL(HAL):
     name = "bench"
@@ -227,6 +242,7 @@ class BenchHAL(HAL):
         self._i2c: dict[tuple[int, int], Model] = {}
         self._spi: dict[tuple[int, int], Model] = {}
         self._uarts: dict[str, _UART] = {}
+        self._leds = {led.sysfs: {"trigger": led.default_trigger, "on": False} for led in board.leds.values()}
         self.models: dict[str, Model] = {}
         self._listeners: list[Callable[[str | None], None]] = []
         self._queue: queue.SimpleQueue = queue.SimpleQueue()
@@ -279,6 +295,21 @@ class BenchHAL(HAL):
                 raise LineBusy(f"{device} уже открыт")
             port = self._uarts[device] = _UART(self, device, baud)
             return port
+
+    def open_led(self, sysfs: str, *, default_trigger: str) -> LedLine:
+        if sysfs not in self._leds:
+            raise OSError(f"нет LED {sysfs}")
+        return _Led(self, sysfs, default_trigger)
+
+    def led_state(self, sysfs: str) -> dict:
+        st, t = self._leds[sysfs], time.monotonic()
+        on = {
+            "none": st["on"],
+            "default-on": True,
+            "timer": t % 1.0 < 0.5,
+            "heartbeat": t % 1.2 < 0.07 or 0.2 <= t % 1.2 < 0.27,  # «тук-тук», как в ядре
+        }.get(st["trigger"], False)
+        return {"on": on, "trigger": st["trigger"], "triggers": LED_TRIGGERS}
 
     def close(self) -> None:
         self._queue.put(None)

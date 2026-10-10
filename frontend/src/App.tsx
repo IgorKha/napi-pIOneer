@@ -10,7 +10,7 @@ const STATUS: Record<LiveStatus, [string, string]> = {
   closed: ["bg-err", "нет связи"],
 };
 
-type AuthState = "checking" | "in" | "out" | "no-password";
+type AuthState = "checking" | "offline" | "in" | "out" | "no-password";
 
 export function App() {
   const [auth, setAuth] = useState<AuthState>("checking");
@@ -18,11 +18,26 @@ export function App() {
 
   useEffect(() => {
     setUnauthorizedHandler(loggedOut);
-    api.me().then((m) => setAuth(m.authenticated ? "in" : m.password_set ? "out" : "no-password"),
-                  () => setAuth("out"));
+    let timer: number | undefined;
+    const check = () =>
+      api.me().then(
+        (m) => setAuth(m.authenticated ? "in" : m.password_set ? "out" : "no-password"),
+        // нет связи (core перезапускается, туннель упал) — это не «вышли из системы»: ждём и повторяем
+        () => { setAuth((a) => (a === "in" ? a : "offline")); timer = window.setTimeout(check, 2000); },
+      );
+    check();
+    return () => window.clearTimeout(timer);
   }, [loggedOut]);
 
   if (auth === "checking") return null;
+  if (auth === "offline") {
+    return (
+      <div className="flex h-full items-center justify-center p-4 text-muted">
+        <span className="mr-2 size-2 animate-pulse rounded-full bg-warn" />
+        Нет связи с платой — пробую снова…
+      </div>
+    );
+  }
   if (auth !== "in") return <Login passwordSet={auth === "out"} onDone={() => setAuth("in")} />;
   return <Main onLogout={() => api.logout().finally(loggedOut)} onUnauthorized={loggedOut} />;
 }
@@ -32,7 +47,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [initialBench, setInitialBench] = useState<BenchModel[] | null>(null);
-  const { pins: live, bench, status } = useLive(initialBench, onUnauthorized);
+  const { pins: live, bench, leds, status } = useLive(initialBench, onUnauthorized);
 
   useEffect(() => {
     api.board().then((b) => {
@@ -71,7 +86,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
       </nav>
 
       {board ? (
-        <BoardPage board={board} live={live} bench={bench} onError={showError} />
+        <BoardPage board={board} live={live} bench={bench} leds={leds} onError={showError} />
       ) : (
         <div className="p-8 text-muted">{loadError ? `Не удалось загрузить плату: ${loadError}` : "Загрузка…"}</div>
       )}

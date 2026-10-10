@@ -14,7 +14,7 @@ PASSWORD = "secret-pw"
 @pytest.fixture
 def anon(tmp_path):
     Auth(tmp_path).set_password(PASSWORD)
-    cfg = Config(hal="bench", uenv_file=Path("/nonexistent"), data_dir=tmp_path)
+    cfg = Config(hal="bench", uenv_file=Path("/nonexistent"), dt_dir=Path("/nonexistent"), data_dir=tmp_path)
     with TestClient(create_app(cfg), headers={"X-Pioneer": "1"}) as c:
         yield c
 
@@ -71,7 +71,7 @@ def test_ws_snapshot_and_updates(client):
         first = ws.receive_json()
         assert first["type"] == "pins" and first["pins"]["J9-7"]["claim"] is None
         client.post(f"{API}/board/pins/J9-7/manual", json={"mode": "gpio_out", "value": True})
-        msg = ws.receive_json()
+        msg = next(m for m in iter(ws.receive_json, None) if m["type"] == "pins")
         assert msg["pins"]["J9-7"] == {"value": True,
                                        "claim": {"mode": "gpio_out", "owners": {"manual": "Ручное управление"}}}
 
@@ -136,7 +136,7 @@ def test_login_throttled(anon, monkeypatch):
 
 
 def test_no_password_set(tmp_path):
-    cfg = Config(hal="bench", uenv_file=Path("/nonexistent"), data_dir=tmp_path)
+    cfg = Config(hal="bench", uenv_file=Path("/nonexistent"), dt_dir=Path("/nonexistent"), data_dir=tmp_path)
     with TestClient(create_app(cfg), headers={"X-Pioneer": "1"}) as c:
         assert c.post(f"{API}/auth/login", json={"password": "x"}).status_code == 503
 
@@ -151,3 +151,17 @@ def test_sessions_survive_restart_hashed(tmp_path):
     assert stat.S_IMODE(os.stat(tmp_path / "auth.json").st_mode) == 0o600
     a.set_password("another-pw")
     assert not Auth(tmp_path).valid(token)
+
+
+def test_led_api(client):
+    board = client.get(f"{API}/board").json()
+    leds = {l["id"]: l for l in board["leds"]}
+    assert leds["user"]["trigger"] == "heartbeat" and leds["power"]["on"] is True
+    r = client.post(f"{API}/board/leds/user", json={"action": "on"})
+    assert r.status_code == 200 and r.json()["on"] is True and r.json()["claim"]["mode"] == "led"
+    assert client.post(f"{API}/board/leds/user", json={"action": "trigger", "trigger": "bad"}).status_code == 422
+    r = client.post(f"{API}/board/leds/user", json={"action": "release"})
+    assert r.json()["trigger"] == "heartbeat" and r.json()["claim"] is None
+    assert board["live_dt"] is False
+    i = {x["id"]: x for x in board["interfaces"]}
+    assert i["uart1"]["enabled_in_uenv"] is True and i["uart1"]["pending"] is False

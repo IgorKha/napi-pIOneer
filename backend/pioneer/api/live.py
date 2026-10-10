@@ -30,6 +30,7 @@ class LiveHub:
         self._lock = threading.Lock()
         self._last: dict[str, dict] = {}
         self._task: asyncio.Task | None = None
+        self._last_leds: dict[str, dict] = {}
         self._sources: list = []  # () -> list[dict]: доп. сообщения (логи/статусы скриптов)
         hw.watch(lambda pin_id, ev: self.mark(pin_id))
 
@@ -40,6 +41,18 @@ class LiveHub:
         """Потокобезопасно: вызывается и из потока HAL."""
         with self._lock:
             self._dirty.update(pin_ids)
+
+    def mark_leds(self) -> None:
+        self._last_leds = {}  # форсировать рассылку LED (смена владельца)
+
+    def led_states(self) -> dict[str, dict]:
+        hal, out = self.hw.hal, {}
+        for lid, led in self.board.leds.items():
+            claim = self.hw.res.claims.get(f"led:{lid}")
+            st = hal.led_state(led.sysfs)
+            out[lid] = {"on": st["on"], "trigger": st["trigger"],
+                        "claim": {"mode": claim.mode, "owners": claim.owners} if claim else None}
+        return out
 
     def mark_bench(self, model_id: str | None) -> None:
         with self._lock:
@@ -61,6 +74,7 @@ class LiveHub:
         self.clients.add(ws)
         try:
             await ws.send_json({"type": "pins", "pins": self.snapshot()})
+            await ws.send_json({"type": "leds", "leds": self.led_states()})
             while True:
                 await ws.receive_text()  # фаза 0: от клиента ничего не ждём
         except WebSocketDisconnect:
@@ -104,6 +118,13 @@ class LiveHub:
             if None not in bench_dirty:
                 models = [m for m in models if m["id"] in bench_dirty]
             msgs.append({"type": "bench", "full": None in bench_dirty, "models": models})
+        if self.clients and self.board.leds:
+            # LED меняются триггерами ядра без событий — опрашиваем (2 файла sysfs на LED)
+            leds = self.led_states()
+            changed_leds = {k: v for k, v in leds.items() if self._last_leds.get(k) != v}
+            if changed_leds:
+                self._last_leds.update(changed_leds)
+                msgs.append({"type": "leds", "leds": changed_leds})
         for drain in self._sources:
             msgs += drain()
         if msgs and self.clients:

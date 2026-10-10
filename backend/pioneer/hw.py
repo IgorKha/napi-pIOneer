@@ -11,8 +11,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pioneer.board import Board, RuntimeMode
-from pioneer.hal.base import HAL, EdgeEvent, I2CBus, InputLine, OutputLine, PwmLine, SPIDevice, UARTPort
-from pioneer.resources import ResourceManager, i2c_id, spi_id, uart_id
+from pioneer.hal.base import (
+    HAL, EdgeEvent, I2CBus, InputLine, LedLine, LineBusy, OutputLine, PwmLine, SPIDevice, UARTPort,
+)
+from pioneer.resources import ResourceConflict, ResourceManager, i2c_id, led_id, spi_id, uart_id
 
 PinListener = Callable[[str, EdgeEvent], None]
 
@@ -44,7 +46,7 @@ class HW:
     def __init__(self, board: Board, hal: HAL, resources: ResourceManager):
         self.board, self.hal, self.res = board, hal, resources
         self._open: dict[str, _Open] = {}
-        self._handles: dict[str, SPIDevice | UARTPort] = {}  # эксклюзивные открытые ресурсы шин
+        self._handles: dict[str, SPIDevice | UARTPort | LedLine] = {}  # эксклюзивные открытые ресурсы
         self._lock = threading.RLock()
         self._watchers: list[PinListener] = []  # все изменения входов (live-уровни для UI)
 
@@ -65,6 +67,9 @@ class HW:
                 # Разделяемый вход открывается с debounce первого захватившего.
                 try:
                     cur = self._open[pin_id] = self._open_line(pin_id, mode, initial, debounce_ms)
+                except LineBusy as e:  # держит ядро или другой процесс — понятная ошибка
+                    self.res.release(owner, pin_id)
+                    raise ResourceConflict(f"{pin_id} {e.strerror or e}") from e
                 except Exception:
                     self.res.release(owner, pin_id)
                     raise
@@ -107,12 +112,22 @@ class HW:
         return self._exclusive(owner, owner_name, uart_id(device), "uart",
                                lambda: self.hal.open_uart(device, baud=baud))
 
+    def led(self, owner: str, owner_name: str, led: str) -> LedLine:
+        info = self.board.leds[led] if led in self.board.leds else None
+        if info is None:
+            raise ResourceConflict(f"нет встроенного LED {led!r}")
+        return self._exclusive(owner, owner_name, led_id(led), "led",
+                               lambda: self.hal.open_led(info.sysfs, default_trigger=info.default_trigger))
+
     def _exclusive(self, owner, owner_name, rid, mode, opener):
         with self._lock:
             self.res.claim(owner, owner_name, rid, mode)
             if rid not in self._handles:
                 try:
                     self._handles[rid] = opener()
+                except LineBusy as e:
+                    self.res.release(owner, rid)
+                    raise ResourceConflict(e.strerror or str(e)) from e
                 except Exception:
                     self.res.release(owner, rid)
                     raise

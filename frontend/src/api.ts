@@ -1,9 +1,10 @@
 // Типы и вызовы /pioneer/api (зеркало pioneer/api/app.py).
 
 export type RuntimeMode = "gpio_in" | "gpio_out" | "soft_pwm" | "adc";
+export type ClaimMode = RuntimeMode | "i2c" | "spi" | "uart" | "led";
 
 export interface Claim {
-  mode: RuntimeMode;
+  mode: ClaimMode;
   owners: Record<string, string>;
 }
 
@@ -23,7 +24,8 @@ export interface Pin extends PinState {
   default_pull: "up" | "down" | "none" | null;
   drive_ma: number | null;
   alt: string[];
-  function: string | null; // "gpio" | "adc" | id интерфейса | null
+  function: string | null; // "gpio" | "adc" | "kernel" | id интерфейса | null
+  kernel_users: string[]; // кто в ядре держит пин (живой DT)
   runtime_modes: RuntimeMode[];
   interface_options: { id: string; role: string }[];
 }
@@ -34,9 +36,26 @@ export interface Iface {
   device: string | null;
   locked: boolean;
   note: string | null;
-  enabled: boolean;
+  enabled: boolean; // сейчас (живой DT на плате)
+  enabled_in_uenv: boolean; // после перезагрузки
+  pending: boolean;
   pins: Record<string, string>;
   conflicts: string[];
+  holders: string[]; // кто вне pioneer держит порт (getty, mbusd…)
+}
+
+export interface LedState {
+  on: boolean;
+  trigger: string;
+  claim: Claim | null;
+}
+
+export interface BoardLed extends LedState {
+  id: string;
+  title: string;
+  color: string;
+  default_trigger: string;
+  triggers: string[];
 }
 
 export interface Board {
@@ -46,7 +65,9 @@ export interface Board {
   headers: { id: string; rows: number; cols: number; pin1: string }[];
   adc: { vref: number; bits: number };
   overlays: string[];
+  live_dt: boolean;
   interfaces: Iface[];
+  leds: BoardLed[];
   pins: Pin[];
 }
 
@@ -122,6 +143,8 @@ export const api = {
     call(`/board/pins/${pin}/manual`, { mode, value }),
   plan: (enable: string[], disable: string[]) =>
     call<InterfacePlan>("/board/interfaces/plan", { enable, disable }),
+  led: (id: string, action: "on" | "off" | "trigger" | "release", trigger?: string) =>
+    call<BoardLed>(`/board/leds/${id}`, { action, trigger }),
   bench: () => call<BenchInfo>("/bench"),
   benchAdd: (kind: string, config: Record<string, unknown>) =>
     call<BenchModel>("/bench/models", { kind, config }),

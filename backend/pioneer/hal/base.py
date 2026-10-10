@@ -70,6 +70,25 @@ class PwmLine(ABC):
         """Остановить и оставить линию в safe_value."""
 
 
+class LedLine(ABC):
+    """Встроенный LED под ядерным gpio-leds (/sys/class/leds)."""
+
+    @abstractmethod
+    def set(self, on: bool) -> None:
+        """Включить/выключить (снимает триггер)."""
+
+    @abstractmethod
+    def set_trigger(self, trigger: str) -> None: ...
+
+    @abstractmethod
+    def close(self) -> None:
+        """Вернуть системный триггер (default_trigger из описания платы)."""
+
+
+class LineBusy(OSError):
+    """Линию/порт держит кто-то вне core: драйвер ядра или другой процесс."""
+
+
 # ---------------------------------------------------------------- шины
 class I2CBus(ABC):
     """Шина целиком; адрес — на операцию. Нет устройства (NACK) — OSError(I2C_NACK_ERRNO)."""
@@ -142,6 +161,17 @@ class HAL(ABC):
 
     @abstractmethod
     def open_uart(self, device: str, *, baud: int = 9600) -> UARTPort: ...
+
+    @abstractmethod
+    def open_led(self, sysfs: str, *, default_trigger: str) -> LedLine: ...
+
+    @abstractmethod
+    def led_state(self, sysfs: str) -> dict:
+        """{"on": bool, "trigger": str, "triggers": [...]} — без захвата."""
+
+    def device_holders(self, device: str) -> list[str]:
+        """Кто вне core держит устройство (/dev/ttyS2 → "agetty (serial-getty@ttyS2.service)")."""
+        return []
 
     @abstractmethod
     def close(self) -> None: ...

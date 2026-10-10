@@ -1,5 +1,10 @@
 """Описание платы (boards/*.yaml) и модель режимов пинов.
 
+Занятость пинов на работающей плате берётся из живого Device Tree (pioneer.dt):
+он учитывает user_overlays и ядерные драйверы. uEnv.txt — «что будет после
+перезагрузки»; если они расходятся, интерфейс помечается pending. Без DT (Mac,
+тесты) — только uEnv.
+
 Режимы пина двух видов:
 - рантайм (`gpio_in`, `gpio_out`, `soft_pwm`, `adc`) — переключаются на лету
   через HAL/ResourceManager, когда пин в функции `gpio`;
@@ -16,6 +21,8 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
+
+from pioneer.dt import DeviceTree
 
 RuntimeMode = Literal["gpio_in", "gpio_out", "soft_pwm", "adc"]
 
@@ -39,6 +46,8 @@ class Interface:
     device: str | None = None
     locked: bool = False
     note: str | None = None
+    dt: str | None = None  # алиас/метка/путь узла в DT
+    conflicts: tuple[str, ...] = ()  # явные конфликты сверх общих пинов
 
     def matches(self, overlay: str) -> bool:
         return any(overlay == ov or overlay.startswith(ov + "-") for ov in self.overlays)
@@ -66,6 +75,16 @@ class Pin:
         if self.adc_channel is not None:
             return "adc"
         return "gpio"
+
+
+@dataclass
+class BoardLed:
+    """Встроенный LED под ядерным gpio-leds: управление через /sys/class/leds."""
+    id: str
+    title: str
+    sysfs: str
+    color: str
+    default_trigger: str
 
 
 @dataclass
@@ -102,6 +121,8 @@ class Board:
     adc_vref: float
     adc_bits: int
     overlays: list[str] = field(default_factory=list)  # из uEnv.txt на момент загрузки
+    dt: DeviceTree | None = None  # живой DT (на плате); None — Mac/тесты
+    leds: dict[str, BoardLed] = field(default_factory=dict)
 
     def pin(self, pin_id: str) -> Pin:
         try:
@@ -110,23 +131,64 @@ class Board:
             raise KeyError(f"нет пина {pin_id!r} на плате {self.id}") from None
 
     # --- интерфейсы
-    def interface_enabled(self, iface_id: str) -> bool:
+    def uenv_enabled(self, iface_id: str) -> bool:
+        """Включён ли в uEnv.txt (= будет после перезагрузки)."""
         iface = self.interfaces[iface_id]
         return iface.locked or any(iface.matches(o) for o in self.overlays)
 
+    def live_enabled(self, iface_id: str) -> bool | None:
+        """Работает ли сейчас по живому DT; None — DT недоступен."""
+        if self.dt is None:
+            return None
+        iface = self.interfaces[iface_id]
+        if not iface.dt:
+            return self.uenv_enabled(iface_id)
+        node = self.dt.node_of(iface.dt)
+        return any(u.node == node for pid in iface.pins
+                   for u in self._users(pid))
+
+    def interface_enabled(self, iface_id: str) -> bool:
+        live = self.live_enabled(iface_id)
+        return self.uenv_enabled(iface_id) if live is None else live
+
+    def interface_pending(self, iface_id: str) -> bool:
+        """uEnv.txt уже изменён, но плата ещё не перезагружена."""
+        live = self.live_enabled(iface_id)
+        return live is not None and live != self.uenv_enabled(iface_id)
+
     @property
     def active_interfaces(self) -> list[str]:
-        return [i for i in self.interfaces if self.interface_enabled(i)]
+        """Включённые в uEnv.txt — от них считается план правки uEnv."""
+        return [i for i in self.interfaces if self.uenv_enabled(i)]
 
     def conflicts(self, iface_id: str) -> list[str]:
-        pins = self.interfaces[iface_id].pins.keys()
+        me = self.interfaces[iface_id]
         return [o for o, other in self.interfaces.items()
-                if o != iface_id and pins & other.pins.keys()]
+                if o != iface_id and (me.pins.keys() & other.pins.keys()
+                                      or o in me.conflicts or iface_id in other.conflicts)]
+
+    def _users(self, pin_id: str):
+        gpio = self.pins[pin_id].gpio
+        return self.dt.users(gpio.chip, gpio.line) if self.dt and gpio else []
+
+    def kernel_users(self, pin_id: str) -> list[str]:
+        """Кто в ядре держит пин (по живому DT)."""
+        return [u.describe() for u in self._users(pin_id)]
 
     # --- режимы пина
     def function(self, pin_id: str) -> str | None:
         """Текущая функция: id включённого интерфейса, 'gpio'/'adc' или None (питание и т.п.)."""
         pin = self.pin(pin_id)
+        if self.dt is not None and pin.gpio:
+            users = self._users(pin_id)
+            nodes = {u.node for u in users}
+            for iid in pin.interfaces:
+                iface = self.interfaces[iid]
+                if iface.dt and self.dt.node_of(iface.dt) in nodes:
+                    return iid
+            if users:
+                return "kernel"  # держит ядерный драйвер вне известных интерфейсов
+            return "gpio"
         for iface in pin.interfaces:
             if self.interface_enabled(iface):
                 return iface
@@ -170,7 +232,7 @@ class Board:
         overlays = [o for o in self.overlays
                     if not any(self.interfaces[i].matches(o) for i in disable)]
         for i in enable:
-            if not self.interface_enabled(i):
+            if not self.uenv_enabled(i):
                 overlays.append(self.interfaces[i].overlays[0])
 
         before = set(self.active_interfaces)
@@ -182,7 +244,7 @@ class Board:
                              needs_reboot=overlays != self.overlays)
 
 
-def load_board(path: Path, overlays: list[str] | None = None) -> Board:
+def load_board(path: Path, overlays: list[str] | None = None, dt: DeviceTree | None = None) -> Board:
     raw = yaml.safe_load(path.read_text())
     pins: dict[str, Pin] = {}
     for p in raw["pins"]:
@@ -205,7 +267,8 @@ def load_board(path: Path, overlays: list[str] | None = None) -> Board:
     for iid, i in raw.get("interfaces", {}).items():
         iface = Interface(id=iid, title=i["title"], overlays=tuple(i["overlays"]),
                           pins=dict(i["pins"]), device=i.get("device"),
-                          locked=i.get("locked", False), note=i.get("note"))
+                          locked=i.get("locked", False), note=i.get("note"), dt=i.get("dt"),
+                          conflicts=tuple(i.get("conflicts", ())))
         for pid in iface.pins:
             if pid not in pins or not pins[pid].gpio:
                 raise ValueError(f"интерфейс {iid}: {pid} не GPIO-пин")
@@ -222,6 +285,8 @@ def load_board(path: Path, overlays: list[str] | None = None) -> Board:
         adc_vref=raw["adc"]["vref"],
         adc_bits=raw["adc"]["bits"],
         overlays=list(overlays or []),
+        dt=dt,
+        leds={lid: BoardLed(id=lid, **v) for lid, v in raw.get("leds", {}).items()},
     )
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BenchModel, PinState } from "./api";
+import type { BenchModel, LedState, PinState } from "./api";
 
 export type LiveStatus = "connecting" | "open" | "closed";
 
@@ -7,6 +7,7 @@ export type LiveStatus = "connecting" | "open" | "closed";
 export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () => void) {
   const [pins, setPins] = useState<Record<string, PinState>>({});
   const [bench, setBench] = useState<Record<string, BenchModel>>({});
+  const [leds, setLeds] = useState<Record<string, LedState>>({});
   const [status, setStatus] = useState<LiveStatus>("connecting");
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === "pins") setPins((prev) => ({ ...prev, ...msg.pins }));
+        if (msg.type === "leds") setLeds((prev) => ({ ...prev, ...msg.leds }));
         if (msg.type === "bench") {
           const upd = Object.fromEntries((msg.models as BenchModel[]).map((m) => [m.id, m]));
           setBench((prev) => (msg.full ? upd : { ...prev, ...upd }));
@@ -45,5 +47,5 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
     };
   }, [onUnauthorized]);
 
-  return { pins, bench, status };
+  return { pins, bench, leds, status };
 }

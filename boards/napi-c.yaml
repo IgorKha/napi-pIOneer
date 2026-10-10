@@ -215,6 +215,9 @@ pins:
   - { id: J10-26, power: 5v }
 
 # ------------------------------------------------------------------ interfaces
+# dt: алиас (serial1), метка DTS (pwm2) или путь узла в живом Device Tree — по нему на плате видно,
+#   включён ли интерфейс сейчас (uEnv.txt — только «что будет после перезагрузки»).
+# conflicts: явные конфликты сверх общих пинов.
 # overlays: интерфейс включён, если в uEnv `overlays=` есть имя из списка или
 #   имя + "-<суффикс>" (rk3308-i2c1-ds1338, rk3308-spi1-w5500).
 # locked: нельзя выключить (консоль).
@@ -222,64 +225,88 @@ pins:
 interfaces:
   uart0:
     title: UART0 (консоль)
+    dt: serial0
     overlays: [rk3308-uart0]
     device: /dev/ttyS0
     locked: true
     pins: { J9-8: TX, J9-10: RX }
   uart1:
     title: UART1
+    dt: serial1
     overlays: [rk3308-uart1]
     device: /dev/ttyS1
     pins: { J9-24: TX, J9-23: RX }
   uart2_m0:
     title: UART2 m0
+    dt: serial2
     overlays: [rk3308-uart2-m0]
     device: /dev/ttyS2
     note: на ttyS2 по умолчанию висит serial-getty@ttyS2
     pins: { J9-19: TX, J9-21: RX }
   uart3_m0:
     title: UART3 m0
+    dt: serial3
     overlays: [rk3308-uart3-m0]
     device: /dev/ttyS3
     pins: { J10-13: TX, J10-14: RX }
   uart4:
     title: UART4
+    dt: serial4
     overlays: [rk3308-uart4]
     device: /dev/ttyS4
     pins: { J10-5: TX, J10-7: RX }
   i2c0:
     title: I2C0
+    dt: i2c0
     overlays: [rk3308-i2c0]
     device: /dev/i2c-0
     pins: { J9-23: SDA, J9-24: SCL }
   i2c1:
     title: I2C1
+    dt: i2c1
     overlays: [rk3308-i2c1]
     device: /dev/i2c-1
     pins: { J9-3: SDA, J9-5: SCL }
   i2c3_m0:
     title: I2C3 m0
+    dt: i2c3
     overlays: [rk3308-i2c3-m0]
     device: /dev/i2c-3
     pins: { J9-11: SDA, J9-13: SCL }
   i2c3_m1:
     title: I2C3 m1
+    dt: i2c3
     overlays: [rk3308-i2c3-m1]
     device: /dev/i2c-3
     pins: { J10-14: SDA, J10-13: SCL }
   spi1:
     title: SPI1
+    dt: spi1
     overlays: [rk3308-spi1]
     pins: { J10-14: MOSI, J10-16: MISO, J10-15: CLK, J10-13: CSN0 }
   spi2:
     title: SPI2
+    dt: spi2
     overlays: [rk3308-spi2]
     pins: { J9-19: MOSI, J9-21: MISO, J9-23: CLK, J9-24: CSN0 }
   pwm2:
     title: PWM2 (аппаратный)
+    dt: pwm2  # метка DTS -> /pwm@ff180020
     overlays: [rk3308-pwm2]
+    conflicts: [i2c3_m0]  # оверлей rk3308-i2c3-m0 явно выключает pwm2/pwm3 (docs/ideas/002 п.5)
+    note: аппаратный PWM на J9-11 = выключить I2C3 m0 в uEnv.txt
     pins: { J9-11: PWM }
   pwm3:
     title: PWM3 (аппаратный)
+    dt: pwm3  # -> /pwm@ff180030
     overlays: [rk3308-pwm3]
+    conflicts: [i2c3_m0]
+    note: аппаратный PWM на J9-13 = выключить I2C3 m0 в uEnv.txt
     pins: { J9-13: PWM }
+
+# ------------------------------------------------------------------ встроенные LED
+# Держит ядерный драйвер gpio-leds (GPIO0_A5/A6, на гребёнку не выведены) — управление
+# через /sys/class/leds: яркость или триггер. При освобождении — системный триггер.
+leds:
+  user: { title: Синий (user), sysfs: "rockpis:blue:user", color: "#4a8cff", default_trigger: heartbeat }
+  power: { title: Зелёный (power), sysfs: "rockpis:green:power", color: "#5cc26b", default_trigger: default-on }

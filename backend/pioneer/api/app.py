@@ -1,6 +1,7 @@
 """FastAPI-приложение pioneer-core: сборка роутеров, жизненный цикл HAL/HW, live по WS."""
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, WebSocket
@@ -13,6 +14,7 @@ from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
 from pioneer.config import REPO_ROOT, Config, load_config
+from pioneer.dt import read_dt
 from pioneer.hal import BenchHAL, create_hal
 from pioneer.hw import HW
 from pioneer.resources import ResourceManager
@@ -34,7 +36,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        b = load_board(cfg.board_file, _read_overlays(cfg))
+        dt = await asyncio.to_thread(read_dt, cfg.dt_dir)  # ~1.5 с на плате
+        b = load_board(cfg.board_file, _read_overlays(cfg), dt)
         hal = create_hal(cfg.hal, b, bench_store=cfg.data_dir / "bench.json")
         app.state.cfg, app.state.board, app.state.hal = cfg, b, hal
         app.state.auth = Auth(cfg.data_dir)
@@ -43,7 +46,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         if isinstance(hal, BenchHAL):
             hal.on_change(live.mark_bench)
         app.state.scripts = sm = ScriptManager(cfg.data_dir, app.state.hw)
-        sm.on_pins = live.mark
+        sm.on_pins, sm.on_leds = live.mark, live.mark_leds
         live.add_source(sm.drain)
         live.start()
         sm.start_autostart()

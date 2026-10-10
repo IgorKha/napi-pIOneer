@@ -4,7 +4,8 @@
 - пин: "J9-7" в рантайм-режиме (gpio_in / gpio_out / soft_pwm / adc);
 - устройство на I2C: "i2c:1@0x3c" — шина общая, адрес эксклюзивный;
 - SPI-устройство: "spi:1.0" (шина.CS) — эксклюзивно;
-- UART: "uart:ttyS3" — эксклюзивно.
+- UART: "uart:ttyS3" — эксклюзивно;
+- встроенный LED: "led:user" — эксклюзивно (через /sys/class/leds).
 
 Шины доступны, только если их интерфейс включён в uEnv.txt; их пины при этом уже
 отданы интерфейсу (Board.function) и как GPIO недоступны.
@@ -21,13 +22,14 @@ from typing import Literal
 
 from pioneer.board import Board, Interface, RuntimeMode
 
-BusMode = Literal["i2c", "spi", "uart"]
+BusMode = Literal["i2c", "spi", "uart", "led"]
 Mode = RuntimeMode | BusMode
 SHARED: frozenset[str] = frozenset({"gpio_in", "adc"})
 
 _I2C = re.compile(r"^i2c:(\d+)@0x([0-9a-f]{1,2})$")
 _SPI = re.compile(r"^spi:(\d+)\.(\d+)$")
 _UART = re.compile(r"^uart:(tty\w+)$")
+_LED = re.compile(r"^led:(\w+)$")
 
 
 def i2c_id(bus: int, addr: int) -> str:
@@ -40,6 +42,10 @@ def spi_id(bus: int, cs: int) -> str:
 
 def uart_id(device: str) -> str:
     return f"uart:{device.removeprefix('/dev/')}"
+
+
+def led_id(led: str) -> str:
+    return f"led:{led}"
 
 
 @dataclass
@@ -79,6 +85,9 @@ class ResourceManager:
         if mode in board.runtime_modes(pin_id):
             return
         func = board.function(pin_id)
+        if func == "kernel":
+            raise ResourceConflict(
+                f"{pin_id} занят драйвером ядра: {', '.join(board.kernel_users(pin_id))}")
         if func in board.interfaces:
             iface = board.interfaces[func]
             raise ResourceConflict(
@@ -105,6 +114,10 @@ class ResourceManager:
             iface = self._enabled_iface(lambda i: i.device == f"/dev/{m[1]}", m[1])
             if iface.locked:
                 raise ResourceConflict(f"{m[1]} — {iface.title}, занят системой")
+        elif m := _LED.match(resource):
+            self._need(mode, "led", resource)
+            if m[1] not in self.board.leds:
+                raise ResourceConflict(f"нет встроенного LED {m[1]!r}")
         else:
             raise ResourceConflict(f"неизвестный ресурс {resource!r}")
 
@@ -121,6 +134,8 @@ class ResourceManager:
         if not candidates:
             raise ResourceConflict(f"{what}: нет на гребёнке Napi-C")
         names = " или ".join(i.title for i in candidates)
+        if any(self.board.interface_pending(i.id) for i in candidates):
+            raise ResourceConflict(f"{what} включена в uEnv.txt, но ещё не применена — перезагрузите плату")
         raise ResourceConflict(f"{what} выключена: включите {names} в uEnv.txt и перезагрузите плату")
 
     # ---- захват

@@ -46,7 +46,15 @@ export function PinInspector({ board, pin, live, bench, onError, onHighlight }: 
       ) : (
         <>
           <Section title="Функция (pinmux)">
-            {iface ? (
+            {pin.function === "kernel" ? (
+              <>
+                <Badge color="kernel">Драйвер ядра</Badge>
+                <p className="mt-2 text-muted">
+                  Пин держит ядро: <span className="font-mono text-fg">{pin.kernel_users.join(", ")}</span>.
+                  Так бывает с user_overlays и драйверами вроде rts-gpios. Как GPIO недоступен, пока узел включён в Device Tree.
+                </p>
+              </>
+            ) : iface ? (
               <>
                 <Badge color="iface">{iface.title} · {iface.pins[pin.id]}</Badge>
                 <p className="mt-2 text-muted">
@@ -54,6 +62,12 @@ export function PinInspector({ board, pin, live, bench, onError, onHighlight }: 
                   {iface.locked ? " Это системная консоль — её нельзя выключить." : " Как GPIO недоступен до выключения интерфейса и перезагрузки."}
                 </p>
                 {iface.note && <p className="mt-1 text-warn">{iface.note}</p>}
+                {iface.pending && (
+                  <p className="mt-1 text-warn">В uEnv.txt он уже {iface.enabled_in_uenv ? "включён" : "выключен"} — изменится после перезагрузки.</p>
+                )}
+                {iface.holders.length > 0 && (
+                  <p className="mt-1 text-warn">Порт {iface.device} открыт: {iface.holders.join(", ")}.</p>
+                )}
               </>
             ) : (
               <Badge color={pin.kind === "adc" ? "adc" : "free"}>{pin.kind === "adc" ? "ADC" : "GPIO"}</Badge>
@@ -95,7 +109,7 @@ function Control({ pin, st, run }: { pin: Pin; st: PinState; run: (p: Promise<un
   return (
     <Section title="Режим сейчас">
       <div className="mb-3 flex items-center gap-2">
-        {claim ? <Badge color={claim.mode === "gpio_out" ? "out" : "in"}>{MODE_LABEL[claim.mode]}</Badge>
+        {claim ? <Badge color={claim.mode === "gpio_out" ? "out" : "in"}>{MODE_LABEL[claim.mode as RuntimeMode]}</Badge>
                : <Badge color="free">Свободен</Badge>}
         {/* владелец — сколько влезет (полностью в подсказке), значение — в слоте фиксированной ширины,
             чтобы строка не прыгала при LOW ↔ HIGH и смене вольт */}
@@ -228,6 +242,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 const BADGE = {
+  kernel: "bg-warn/15 text-[#e8c08a] border-warn/60",
   iface: "bg-pin-iface/20 text-[#cbb8f0] border-pin-iface/60",
   free: "bg-panel-2 text-fg border-line",
   out: "bg-pin-out/20 text-[#9db8e0] border-pin-out/60",

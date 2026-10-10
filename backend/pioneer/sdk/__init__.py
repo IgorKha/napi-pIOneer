@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 from pioneer.sdk import _rpc
 
-__all__ = ["Input", "Output", "Pwm", "Adc", "I2C", "SPI", "UART", "Event",
+__all__ = ["Input", "Output", "Pwm", "Adc", "I2C", "SPI", "UART", "BoardLed", "Event",
            "every", "after", "run", "sleep", "log", "PioneerError"]
 
 PioneerError = _rpc.PioneerError
@@ -157,6 +157,37 @@ class Adc:
     @property
     def volts(self) -> float:
         return float(_rpc.call("read", pin=self.pin))
+
+
+class BoardLed:
+    """Встроенный LED платы: "user" (синий) или "power" (зелёный). При остановке скрипта
+    возвращается системный триггер (heartbeat / default-on)."""
+
+    def __init__(self, led: str = "user"):
+        self._h = _rpc.call("led_open", led=led)
+        self._value = False
+
+    @property
+    def value(self) -> bool:
+        return self._value
+
+    @value.setter
+    def value(self, v: bool) -> None:
+        self._value = bool(v)
+        _rpc.call("led", h=self._h, on=self._value)
+
+    def on(self) -> None:
+        self.value = True
+
+    def off(self) -> None:
+        self.value = False
+
+    def toggle(self) -> None:
+        self.value = not self._value
+
+    def trigger(self, name: str) -> None:
+        """Отдать LED ядру: "heartbeat", "timer", "default-on", "mmc0", "none"…"""
+        _rpc.call("led", h=self._h, trigger=name)
 
 
 # ---------------------------------------------------------------- шины

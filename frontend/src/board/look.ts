@@ -29,6 +29,9 @@ export function pinLook(board: Board, pin: Pin, st: PinState | undefined): PinLo
   if (pin.power === "gnd") return { fill: C("pin-gnd"), stroke: "#555", text: "#888", label: "GND", dim: true };
   if (pin.special) return { fill: "#3a3a3a", stroke: "#555", text: "#999", label: pin.special, dim: true };
 
+  if (pin.function === "kernel") {
+    return { fill: "#3a2e22", stroke: C("warn"), text: "#e8c08a", label: `ядро · ${pin.kernel_users[0] ?? "?"}`, dim: false };
+  }
   const iface = board.interfaces.find((i) => i.id === pin.function);
   if (iface) {
     return {

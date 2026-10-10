@@ -8,21 +8,24 @@
 """
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import selectors
 import threading
+import time
 from datetime import timedelta
 from pathlib import Path
 
 from pioneer.board import GpioRef
 from pioneer.hal.base import (
-    EVENT_BUFFER_SIZE, HAL, EdgeCallback, EdgeEvent, EdgeMode, I2CBus, InputLine, OutputLine,
-    SPIDevice, UARTPort, try_realtime,
+    EVENT_BUFFER_SIZE, HAL, EdgeCallback, EdgeEvent, EdgeMode, I2CBus, InputLine, LedLine, LineBusy,
+    OutputLine, SPIDevice, UARTPort, try_realtime,
 )
 
 log = logging.getLogger(__name__)
 CONSUMER = "pioneer"
+HOLDERS_CACHE_S = 2.0
 
 
 # ---------------------------------------------------------------- GPIO
@@ -174,6 +177,59 @@ class _UART(UARTPort):
         self.port.close()
 
 
+# ---------------------------------------------------------------- LED
+LEDS = Path("/sys/class/leds")
+
+
+def _led_state(sysfs: str) -> dict:
+    d = LEDS / sysfs
+    triggers = (d / "trigger").read_text().split()
+    current = next((t[1:-1] for t in triggers if t.startswith("[")), "none")
+    return {"on": int((d / "brightness").read_text()) > 0, "trigger": current,
+            "triggers": [t.strip("[]") for t in triggers]}
+
+
+class _Led(LedLine):
+    def __init__(self, sysfs: str, default_trigger: str):
+        self.dir, self.default = LEDS / sysfs, default_trigger
+        if not self.dir.exists():
+            raise OSError(errno.ENOENT, f"нет LED {sysfs} в /sys/class/leds")
+
+    def set(self, on: bool) -> None:
+        (self.dir / "trigger").write_text("none")
+        (self.dir / "brightness").write_text("1" if on else "0")
+
+    def set_trigger(self, trigger: str) -> None:
+        if trigger not in _led_state(self.dir.name)["triggers"]:
+            raise ValueError(f"нет триггера {trigger!r}")
+        (self.dir / "trigger").write_text(trigger)
+
+    def close(self) -> None:
+        (self.dir / "trigger").write_text(self.default)
+
+
+def _scan_holders(prefix: str = "/dev/tty") -> dict[str, list[str]]:
+    """Один проход по /proc/*/fd: устройство -> процессы (кроме нас), comm + systemd-юнит.
+    На плате ~0.3 с, поэтому — один проход на все порты, а не на каждый."""
+    me, out = os.getpid(), {}
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        if int(pid) == me:
+            continue
+        try:
+            devs = {t for fd in os.listdir(f"/proc/{pid}/fd")
+                    if (t := os.path.realpath(f"/proc/{pid}/fd/{fd}")).startswith(prefix)}
+            if not devs:
+                continue
+            comm = Path(f"/proc/{pid}/comm").read_text().strip()
+            unit = next((part for line in Path(f"/proc/{pid}/cgroup").read_text().splitlines()
+                         for part in line.split("/") if part.endswith(".service")), None)
+        except OSError:
+            continue  # процесс ушёл или нет прав
+        for d in devs:
+            out.setdefault(d, []).append(f"{comm} ({unit})" if unit else f"{comm} (pid {pid})")
+    return out
+
+
 # ---------------------------------------------------------------- HAL
 class LinuxHAL(HAL):
     name = "linux"
@@ -183,6 +239,8 @@ class LinuxHAL(HAL):
         self.adc_scale_v = float((self.adc_dir / "in_voltage_scale").read_text()) / 1000
         self._reader = _EventReader()
         self._i2c: dict[int, _I2C] = {}
+        self._holders: dict[str, list[str]] = {}
+        self._holders_at = 0.0
 
     def open_input(self, gpio: GpioRef, *, edge: EdgeMode = "none", debounce_ms: int = 0,
                    on_edge: EdgeCallback | None = None) -> InputLine:
@@ -191,8 +249,7 @@ class LinuxHAL(HAL):
         edges = {"none": Edge.NONE, "rising": Edge.RISING, "falling": Edge.FALLING, "both": Edge.BOTH}
         settings = gpiod.LineSettings(direction=Direction.INPUT, edge_detection=edges[edge],
                                       debounce_period=timedelta(milliseconds=debounce_ms))
-        req = gpiod.request_lines(gpio.path, consumer=CONSUMER, config={gpio.line: settings},
-                                  event_buffer_size=EVENT_BUFFER_SIZE)
+        req = self._request(gpio, dict(config={gpio.line: settings}, event_buffer_size=EVENT_BUFFER_SIZE))
         if on_edge and edge != "none":
             self._reader.add(req, on_edge)
         return _Input(self, req, gpio.line)
@@ -200,9 +257,21 @@ class LinuxHAL(HAL):
     def open_output(self, gpio: GpioRef, *, initial: bool = False) -> OutputLine:
         import gpiod
         from gpiod.line import Direction, Value
-        req = gpiod.request_lines(gpio.path, consumer=CONSUMER, config={gpio.line: gpiod.LineSettings(
-            direction=Direction.OUTPUT, output_value=Value.ACTIVE if initial else Value.INACTIVE)})
+        req = self._request(gpio, dict(config={gpio.line: gpiod.LineSettings(
+            direction=Direction.OUTPUT, output_value=Value.ACTIVE if initial else Value.INACTIVE)}))
         return _Output(req, gpio.line, initial)
+
+    @staticmethod
+    def _request(gpio: GpioRef, kwargs: dict):
+        import gpiod
+        try:
+            return gpiod.request_lines(gpio.path, consumer=CONSUMER, **kwargs)
+        except OSError as e:
+            if e.errno != errno.EBUSY:
+                raise
+            with gpiod.Chip(gpio.path) as chip:
+                consumer = chip.get_line_info(gpio.line).consumer or "?"
+            raise LineBusy(errno.EBUSY, f"занят: линию держит «{consumer}» (драйвер ядра или другой процесс)") from e
 
     def read_adc(self, channel: int) -> float:
         return int((self.adc_dir / f"in_voltage{channel}_raw").read_text()) * self.adc_scale_v
@@ -217,7 +286,23 @@ class LinuxHAL(HAL):
         return _SPI(bus, cs, mode, speed_hz)
 
     def open_uart(self, device: str, *, baud: int = 9600) -> UARTPort:
+        if holders := _scan_holders().get(os.path.realpath(device), []):  # свежие данные
+            units = [h.split("(")[1].rstrip(")") for h in holders if ".service" in h]
+            hint = f" — остановите: systemctl stop {' '.join(units)}" if units else ""
+            raise LineBusy(errno.EBUSY, f"{device} уже открыт: {', '.join(holders)}{hint}")
         return _UART(device, baud)
+
+    def device_holders(self, device: str) -> list[str]:
+        now = time.monotonic()
+        if now - self._holders_at > HOLDERS_CACHE_S:  # для UI: кэш, чтобы GET /board был быстрым
+            self._holders, self._holders_at = _scan_holders(), now
+        return self._holders.get(os.path.realpath(device), [])
+
+    def open_led(self, sysfs: str, *, default_trigger: str) -> LedLine:
+        return _Led(sysfs, default_trigger)
+
+    def led_state(self, sysfs: str) -> dict:
+        return _led_state(sysfs)
 
     def close(self) -> None:
         self._reader.stop()

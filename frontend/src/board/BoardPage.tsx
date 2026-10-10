@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { BenchModel, Board, PinState } from "../api";
+import type { BenchModel, Board, LedState, PinState } from "../api";
+import { LedPanel } from "./LedPanel";
 import { BoardSvg } from "./BoardSvg";
 import { ifaceShort } from "./look";
 import { PinInspector } from "./PinInspector";
@@ -20,10 +21,12 @@ interface Props {
   board: Board;
   live: Record<string, PinState>;
   bench: Record<string, BenchModel>;
+  leds: Record<string, LedState>;
   onError: (msg: string) => void;
 }
 
-export function BoardPage({ board, live, bench, onError }: Props) {
+export function BoardPage({ board, live, bench, leds, onError }: Props) {
+  const run = (p: Promise<unknown>) => p.catch((e: Error) => onError(e.message));
   const models = Object.values(bench);
   const [selected, setSelected] = useState<string | null>("J9-7");
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
@@ -46,18 +49,27 @@ export function BoardPage({ board, live, bench, onError }: Props) {
           ))}
         </div>
 
+        <LedPanel leds={board.leds} live={leds} run={run} />
+
         <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Интерфейсы (overlays в uEnv.txt)</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+            Интерфейсы {board.live_dt ? "(сейчас — по Device Tree)" : "(overlays в uEnv.txt)"}
+          </h3>
           <div className="flex flex-wrap gap-1.5">
             {board.interfaces.map((i) => (
               <button key={i.id}
                       onMouseEnter={() => hl(Object.keys(i.pins))} onMouseLeave={() => hl([])}
                       onClick={() => setSelected(Object.keys(i.pins)[0])}
-                      title={`${i.title}: ${Object.entries(i.pins).map(([p, r]) => `${p} ${r}`).join(", ")}`}
-                      className={`rounded border px-2 py-1 font-mono text-xs ${i.enabled
+                      title={[`${i.title}: ${Object.entries(i.pins).map(([p, r]) => `${p} ${r}`).join(", ")}`,
+                              i.pending && `после перезагрузки: ${i.enabled_in_uenv ? "включится" : "выключится"}`,
+                              i.holders.length > 0 && `порт открыт: ${i.holders.join(", ")}`]
+                             .filter(Boolean).join("\n")}
+                      className={`rounded border px-2 py-1 font-mono text-xs ${i.pending ? "border-dashed" : ""} ${i.enabled
                         ? "border-pin-iface/60 bg-pin-iface/15 text-[#cbb8f0]"
                         : "border-line text-muted hover:text-fg"}`}>
                 {ifaceShort(i)}
+                {i.pending && <span className="ml-1 text-warn">↻</span>}
+                {i.holders.length > 0 && <span className="ml-1 text-warn">●</span>}
               </button>
             ))}
           </div>
