@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import collections
 import threading
+import time
 
 from pioneer.engine.node import In, Node, NodeError, Out, Param, node
 from pioneer.engine.types import Origin
@@ -311,7 +312,9 @@ class Tm1637(Node):
                     return
                 frame, self._frame = self._frame, None
             try:
+                t0 = time.perf_counter()
                 self._drv.show(*frame)
+                self.show({"frame_ms": round((time.perf_counter() - t0) * 1000, 1)})
             except Exception as e:  # линия отобрана при остановке и т.п.
                 if not self._quit:
                     self.from_thread(Origin("system"), lambda err=e: self._raise(err))

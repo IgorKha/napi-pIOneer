@@ -207,6 +207,8 @@ function Body({ data }: { data: FlowNodeData }) {
     return <NumberControl value={Number(view?.value ?? gnode.params.initial ?? 0)} disabled={disabled} hint={hint} onChange={send} />;
   }
   if (id === "builtin.watch") return <WatchView view={view} running={running} />;
+  if (id === "builtin.tm1637" && running && typeof view?.frame_ms === "number")
+    return <div className="px-3 text-[10.5px] text-muted">кадр {view.frame_ms} мс</div>;
   return null;
 }
 
