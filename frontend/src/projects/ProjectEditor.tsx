@@ -14,7 +14,7 @@ import { BoardNodeView, type BoardFlowNode } from "./BoardNode";
 import { type FlowNode, GraphNodeView, type NodeActions } from "./GraphNode";
 import { Inspector } from "./Inspector";
 import { DND_TYPE, Palette } from "./Palette";
-import { BOARD_ID, canConnect, PIN_HANDLE, SOCKET_COLOR } from "./sockets";
+import { BOARD_ID, canConnect, PIN_HANDLE, pinHandle, SOCKET_COLOR } from "./sockets";
 
 const nodeTypes = { pnode: GraphNodeView, board: BoardNodeView };
 type AnyNode = FlowNode | BoardFlowNode;
@@ -136,13 +136,16 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   }), [id, send, onError]);
 
   // ---- граф -> узлы/рёбра React Flow
-  const pinParam = useCallback((type: string) => schemas.get(type)?.params.find((p) => p.kind === "pin")?.name, [schemas]);
+  // параметры-пины типа ноды (провод от платы к гнезду __pin:<параметр>)
+  const pinParams = useCallback((type: string) => (schemas.get(type)?.params ?? []).filter((p) => p.kind === "pin").map((p) => p.name),
+                                [schemas]);
+  const paramOf = (handle: string | null | undefined) => (handle?.startsWith(PIN_HANDLE) ? handle.slice(PIN_HANDLE.length) : null);
 
   useEffect(() => {
     if (!project) return;
     const g = project.graph;
     const issues = [...project.validation.errors, ...project.validation.incomplete, ...project.validation.warnings];
-    const used = new Set(g.nodes.map((n) => pinParam(n.type) && n.params[pinParam(n.type)!]).filter(Boolean) as string[]);
+    const used = new Set(g.nodes.flatMap((n) => pinParams(n.type).map((p) => n.params[p])).filter(Boolean) as string[]);
     const bv = g.view?.board ?? { position: [-420, 0] as [number, number], collapsed: false };
     setNodes((prev) => {
       // сохраняем объекты React Flow (measured, selected, позиция при перетаскивании): иначе каждое
@@ -169,7 +172,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
       }
       return out;
     });
-  }, [project, schemas, board, pinLive, live, running, actions, send, pinParam]);
+  }, [project, schemas, board, pinLive, live, running, actions, send, pinParams]);
 
   const edges: Edge[] = useMemo(() => {
     if (!project) return [];
@@ -182,19 +185,18 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
         style: { stroke: SOCKET_COLOR[type], strokeWidth: 2, strokeDasharray: type === "Event" ? "5 4" : undefined },
       };
     });
-    for (const n of g.nodes) {
-      const p = pinParam(n.type);
-      const pin = p && (n.params[p] as string | null);
+    for (const n of g.nodes) for (const p of pinParams(n.type)) {
+      const pin = n.params[p] as string | null;
       if (!pin) continue;
       const high = pinLive[pin]?.value === true;
       out.push({
-        id: `pin:${n.id}`, source: BOARD_ID, sourceHandle: `pin:${pin}`, target: n.id, targetHandle: PIN_HANDLE,
+        id: `pin:${n.id}:${p}`, source: BOARD_ID, sourceHandle: `pin:${pin}`, target: n.id, targetHandle: pinHandle(p),
         style: { stroke: high ? "var(--color-pin-high)" : "#8a8a8a", strokeWidth: 1.5, strokeDasharray: "2 3" },
         animated: high,
       });
     }
     return out;
-  }, [project, schemas, pinLive, pinParam]);
+  }, [project, schemas, pinLive, pinParams]);
 
   // ---- события канваса
   const onNodesChange = useCallback((changes: NodeChange<AnyNode>[]) => {
@@ -215,22 +217,21 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   const isValidConnection: IsValidConnection = useCallback((c) => {
     if (c.source === BOARD_ID) {
       const gn = project?.graph.nodes.find((n) => n.id === c.target);
-      return c.targetHandle === PIN_HANDLE && !!gn && !!pinParam(gn.type);
+      return !!gn && pinParams(gn.type).includes(paramOf(c.targetHandle) ?? "");
     }
-    if (c.targetHandle === PIN_HANDLE || c.source === c.target) return false;
+    if (paramOf(c.targetHandle) !== null || c.source === c.target) return false;
     const a = typeOf(c.source, c.sourceHandle, "out"), b = typeOf(c.target, c.targetHandle, "in");
     return !!a && !!b && canConnect(a, b);
-  }, [project, typeOf, pinParam]);
+  }, [project, typeOf, pinParams]);
 
   const onConnect = useCallback((c: Connection) => {
     if (c.source === BOARD_ID) {
-      const gn = project?.graph.nodes.find((n) => n.id === c.target);
-      const p = gn && pinParam(gn.type);
+      const p = paramOf(c.targetHandle);
       if (p) send([{ op: "set_param", node: c.target, name: p, value: c.sourceHandle!.slice(4) }]);
       return;
     }
     send([{ op: "connect", from: [c.source, c.sourceHandle], to: [c.target, c.targetHandle] }]);
-  }, [project, send, pinParam]);
+  }, [send]);
 
   const onDelete = useCallback(({ nodes: ns, edges: es }: { nodes: AnyNode[]; edges: Edge[] }) => {
     const removed = new Set(ns.map((n) => n.id));
@@ -238,15 +239,14 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
     for (const e of es) {
       if (removed.has(e.target)) continue;
       if (e.source === BOARD_ID) {
-        const gn = project?.graph.nodes.find((n) => n.id === e.target);
-        const p = gn && pinParam(gn.type);
+        const p = paramOf(e.targetHandle);
         if (p) ops.push({ op: "set_param", node: e.target, name: p, value: null });
       } else if (!removed.has(e.source)) {
         ops.push({ op: "disconnect", to: [e.target, e.targetHandle] });
       }
     }
     send(ops);
-  }, [project, send, pinParam]);
+  }, [send]);
 
   const onNodeDragStop = useCallback((_: unknown, __: AnyNode, dragged: AnyNode[]) => {
     const ops: Op[] = dragged.map((n) => ({ op: "move", node: n.id, position: [Math.round(n.position.x), Math.round(n.position.y)] }));

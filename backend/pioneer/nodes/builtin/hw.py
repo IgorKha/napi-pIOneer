@@ -4,7 +4,7 @@ from __future__ import annotations
 import collections
 import threading
 
-from pioneer.engine.node import In, Node, Out, Param, node
+from pioneer.engine.node import In, Node, NodeError, Out, Param, node
 from pioneer.engine.types import Origin
 
 CAT, COLOR = "Железо", "#b5523b"
@@ -259,3 +259,95 @@ class BoardLed(Node):
     def on_change(self, changed):
         self._led.set(self.on)
 
+
+
+@node("builtin.tm1637", title="Дисплей TM1637", category=CAT, color=COLOR, doc="""
+4-разрядный 7-сегментный индикатор на TM1637 (модуль HW-069 и подобные), два провода:
+CLK и DIO на любые GPIO-пины. Драйвер работает внутри сервиса — кадр выводится за
+миллисекунды (из Python-скрипта тот же протокол стоит ~0.7 с из-за вызовов к ядру).
+
+Что показывать:
+- «Текст» (если не пустой) — до 4 знаков: цифры, `-`, `_`, `°`, часть латиницы (`PASS`,
+  `Err`, `HOLd`); `12:34` — с двоеточием;
+- иначе «Число»: целое −999…9999 или, в формате «ММ:СС», секунды как часы.
+
+«Двоеточие» включает точки между разрядами (подключите Переключатель от Интервала —
+будет мигать). Яркость 0–7. При остановке проекта индикатор гаснет.
+
+Пример: Интервал 1 с → Счётчик → Дисплей TM1637 (формат ММ:СС) — секундомер.
+
+Железо: питание модуля 3.3 В (от 5 В подтяжки модуля выдадут 5 В на пины платы — нельзя).
+От 3.3 В светит чуть тусклее.
+""")
+class Tm1637(Node):
+    clk = Param("pin", None, title="CLK", modes=("gpio_out",), required=True, doc="Пин тактов (CLK модуля)")
+    dio = Param("pin", None, title="DIO", modes=("gpio_out",), required=True, doc="Пин данных (DIO модуля)")
+    format = Param("choice", "number", title="Формат числа",
+                   choices=[("number", "целое"), ("mmss", "ММ:СС из секунд")], doc="Как показывать вход «Число»")
+    brightness = Param("int", 4, title="Яркость", min=0, max=7, doc="0 — тускло, 7 — максимум")
+    value = In("Number", 0.0, title="Число")
+    text = In("String", "", title="Текст", doc="Если не пусто — показывается вместо числа")
+    colon = In("Bool", False, title="Двоеточие")
+
+    def setup(self):
+        from pioneer.drivers.tm1637 import TM1637
+        self.hw.output(self.clk, initial=True)
+        self.hw.output(self.dio, initial=True)
+        pins = {"clk": self.clk, "dio": self.dio}
+        self._drv = TM1637(lambda line, v: self.hw.write(pins[line], v))
+        # кадры выводит свой поток: волна не ждёт bit-bang, промежуточные кадры схлопываются
+        self._frame: tuple | None = None
+        self._cv = threading.Condition()
+        self._quit = False
+        self._thread = threading.Thread(target=self._writer, name=f"tm1637-{self.id}", daemon=True)
+        self._thread.start()
+
+    def _writer(self):
+        while True:
+            with self._cv:
+                while self._frame is None and not self._quit:
+                    self._cv.wait()
+                if self._quit:
+                    return
+                frame, self._frame = self._frame, None
+            try:
+                self._drv.show(*frame)
+            except Exception as e:  # линия отобрана при остановке и т.п.
+                if not self._quit:
+                    self.from_thread(Origin("system"), lambda err=e: self._raise(err))
+
+    def _raise(self, e: Exception):
+        raise e
+
+    def start(self):
+        self.on_change({"value"})
+
+    def on_change(self, changed):
+        from pioneer.drivers.tm1637 import DisplayError, encode_mmss, encode_number, encode_text
+        try:
+            if self.text:
+                segs, colon = encode_text(self.text)
+            else:
+                segs, colon = (encode_mmss if self.format == "mmss" else encode_number)(self.value), False
+        except DisplayError as e:
+            segs, colon = encode_text("----")[0], False
+            self._push(segs, colon)
+            raise NodeError(str(e)) from None
+        self._push(segs, colon or self.colon)
+
+    def _push(self, segs, colon):
+        with self._cv:
+            self._frame = (segs, colon, self.brightness)
+            self._cv.notify()
+
+    def stop(self):
+        if not hasattr(self, "_thread"):
+            return
+        with self._cv:
+            self._quit = True
+            self._cv.notify()
+        self._thread.join(2.0)
+        try:
+            self._drv.off()  # погасить, пока линии ещё наши
+        except Exception:
+            pass

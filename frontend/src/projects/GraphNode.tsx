@@ -1,7 +1,7 @@
 import { Handle, type NodeProps, Position, type Node } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import type { Board, GraphNode as GNode, Issue, NodeTypeSchema, ProjectLive, SocketSchema } from "../api";
-import { formatLive, PIN_HANDLE, SOCKET_COLOR } from "./sockets";
+import { formatLive, pinHandle, SOCKET_COLOR } from "./sockets";
 
 export interface NodeActions {
   inline: (node: string, input: string, value: unknown) => void;
@@ -49,7 +49,7 @@ export const GraphNodeView = memo(function GraphNodeView({ data, selected }: Nod
   const state = live?.nodes[gnode.id];
   const error = running && state?.state === "error" ? state.error : null;
   const problems = issues;
-  const pinParam = schema.params.find((p) => p.kind === "pin" || p.kind === "interface" || p.kind === "led");
+  const hwParams = schema.params.filter((p) => p.kind === "pin" || p.kind === "interface" || p.kind === "led");
   const collapsed = !!gnode.collapsed;
   const border = error ? "border-err" : selected ? "border-white/80" : problems.length ? "border-warn/70" : "border-[#151515]";
 
@@ -65,7 +65,7 @@ export const GraphNodeView = memo(function GraphNodeView({ data, selected }: Nod
         {!running && problems.length > 0 && <span className="text-warn" aria-label="Есть проблемы">!</span>}
         {collapsed && (
           <>
-            {pinParam?.kind === "pin" && <SocketDot type="Any" kind="target" id={PIN_HANDLE} collapsed />}
+            {hwParams.filter((p) => p.kind === "pin").map((p) => <SocketDot key={p.name} type="Any" kind="target" id={pinHandle(p.name)} collapsed />)}
             {schema.inputs.map((s) => <SocketDot key={s.name} type={s.type} kind="target" id={s.name} collapsed />)}
             {schema.outputs.map((s) => <SocketDot key={s.name} type={s.type} kind="source" id={s.name} collapsed />)}
           </>
@@ -74,7 +74,10 @@ export const GraphNodeView = memo(function GraphNodeView({ data, selected }: Nod
 
       {!collapsed && (
         <div className="flex flex-col gap-0.5 py-1.5">
-          {pinParam && <PinRow gnode={gnode} param={pinParam.name} kind={pinParam.kind} board={data.board} />}
+          {hwParams.map((p) => (
+            <PinRow key={p.name} gnode={gnode} param={p.name} kind={p.kind} board={data.board}
+                    title={hwParams.length > 1 ? p.title : undefined} />
+          ))}
           {schema.outputs.map((s) => {
             const lv = s.type === "Event" ? live?.events[`${gnode.id}.${s.name}`] : live?.values[`${gnode.id}.${s.name}`];
             return (
@@ -101,16 +104,16 @@ export const GraphNodeView = memo(function GraphNodeView({ data, selected }: Nod
   );
 });
 
-function PinRow({ gnode, param, kind, board }: { gnode: GNode; param: string; kind: string; board: Board }) {
+function PinRow({ gnode, param, kind, board, title }: { gnode: GNode; param: string; kind: string; board: Board; title?: string }) {
   const v = gnode.params[param] as string | null | undefined;
   const pin = kind === "pin" && v ? board.pins.find((p) => p.id === v) : undefined;
   return (
     <div className="relative mx-2 mb-1 flex h-[22px] items-center gap-1.5 rounded bg-[#262626] px-2">
       {kind === "pin" && (
-        <Handle type="target" position={Position.Left} id={PIN_HANDLE}
+        <Handle type="target" position={Position.Left} id={pinHandle(param)}
                 style={{ width: 9, height: 9, left: -8, background: "#e6e6e6", border: "1.5px dashed #1d1d1d" }} />
       )}
-      <span className="text-muted">{kind === "pin" ? "пин" : kind === "led" ? "LED" : "шина"}</span>
+      <span className="text-muted">{title ?? (kind === "pin" ? "пин" : kind === "led" ? "LED" : "шина")}</span>
       {v ? (
         <span className="font-mono text-fg">{v}{pin?.name && <span className="text-muted"> · {pin.name}</span>}</span>
       ) : (

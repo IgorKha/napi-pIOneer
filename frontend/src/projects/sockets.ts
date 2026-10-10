@@ -28,4 +28,6 @@ export function formatLive(v: unknown): string {
 }
 
 export const BOARD_ID = "@board";
-export const PIN_HANDLE = "__pin";
+/** Гнездо «пин» у ноды железа: по одному на параметр-пин (у TM1637 — CLK и DIO). */
+export const PIN_HANDLE = "__pin:";
+export const pinHandle = (param: string) => PIN_HANDLE + param;
