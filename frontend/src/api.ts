@@ -32,6 +32,8 @@ export interface Pin extends PinState {
 
 export interface Iface {
   id: string;
+  controller: string; // имя для SDK без mux-варианта: uart2_m0 -> uart2
+  kind: string; // uart | i2c | spi | pwm
   title: string;
   device: string | null;
   locked: boolean;

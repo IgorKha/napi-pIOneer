@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from pioneer.board import Board, RuntimeMode
+from pioneer.board import Board, Interface, InterfaceError, RuntimeMode
 from pioneer.hal.base import (
     HAL, EdgeEvent, I2CBus, InputLine, LedLine, LineBusy, OutputLine, PwmLine, SPIDevice, UARTPort,
 )
@@ -29,8 +29,8 @@ class _Open:
 class I2CDevice:
     """Устройство по одному адресу на общей шине."""
 
-    def __init__(self, bus: I2CBus, bus_no: int, addr: int):
-        self.bus, self.bus_no, self.addr = bus, bus_no, addr
+    def __init__(self, bus: I2CBus, iface: Interface, addr: int):
+        self.bus, self.iface, self.addr = bus, iface, addr
 
     def write(self, data: bytes) -> None:
         self.bus.write(self.addr, data)
@@ -92,25 +92,35 @@ class HW:
             return o.line.duty  # type: ignore[union-attr]
         return o.line.read()  # type: ignore[union-attr]
 
-    # ---- шины
-    def i2c(self, owner: str, owner_name: str, bus: int, addr: int) -> I2CDevice:
+    # ---- шины (адресуются по интерфейсу из boards/*.yaml: "i2c1", "uart2", "spi2_m0"…)
+    def bus(self, name: str, kind: str) -> Interface:
+        """Включённый интерфейс по имени из SDK/нод; ResourceConflict с подсказкой, если выключен."""
+        try:
+            return self.board.bus_interface(name, kind)
+        except InterfaceError as e:
+            raise ResourceConflict(str(e)) from None
+
+    def i2c(self, owner: str, owner_name: str, iface: str, addr: int) -> I2CDevice:
+        bus = self.bus(iface, "i2c")
+        rid = i2c_id(bus.controller, addr)
         with self._lock:
-            self.res.claim(owner, owner_name, i2c_id(bus, addr), "i2c")
+            self.res.claim(owner, owner_name, rid, "i2c")
             try:
-                return I2CDevice(self.hal.open_i2c(bus), bus, addr)
+                return I2CDevice(self.hal.open_i2c(bus.number), bus, addr)
             except Exception:
-                self.res.release(owner, i2c_id(bus, addr))
+                self.res.release(owner, rid)
                 raise
 
-    def spi(self, owner: str, owner_name: str, bus: int, cs: int, *, mode: int = 0,
+    def spi(self, owner: str, owner_name: str, iface: str, cs: int, *, mode: int = 0,
             speed_hz: int = 1_000_000) -> SPIDevice:
-        return self._exclusive(owner, owner_name, spi_id(bus, cs), "spi",
-                               lambda: self.hal.open_spi(bus, cs, mode=mode, speed_hz=speed_hz))
+        bus = self.bus(iface, "spi")
+        return self._exclusive(owner, owner_name, spi_id(bus.controller, cs), "spi",
+                               lambda: self.hal.open_spi(bus.number, cs, mode=mode, speed_hz=speed_hz))
 
-    def uart(self, owner: str, owner_name: str, device: str, *, baud: int = 9600) -> UARTPort:
-        device = device if device.startswith("/dev/") else f"/dev/{device}"
-        return self._exclusive(owner, owner_name, uart_id(device), "uart",
-                               lambda: self.hal.open_uart(device, baud=baud))
+    def uart(self, owner: str, owner_name: str, iface: str, *, baud: int = 9600) -> UARTPort:
+        bus = self.bus(iface, "uart")
+        return self._exclusive(owner, owner_name, uart_id(bus.controller), "uart",
+                               lambda: self.hal.open_uart(bus.device, baud=baud))
 
     def led(self, owner: str, owner_name: str, led: str) -> LedLine:
         info = self.board.leds[led] if led in self.board.leds else None

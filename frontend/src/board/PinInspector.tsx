@@ -23,6 +23,12 @@ interface Props {
   onHighlight: (pins: string[]) => void;
 }
 
+const SDK_SNIPPET: Record<string, (c: string) => string> = {
+  uart: (c) => `UART("${c}", baud=9600)`,
+  i2c: (c) => `I2C("${c}", 0x3C)`,
+  spi: (c) => `SPI("${c}", cs=0)`,
+};
+
 export function PinInspector({ board, pin, live, bench, onError, onHighlight }: Props) {
   const st: PinState = { value: live?.value ?? pin.value, claim: live ? live.claim : pin.claim };
   const iface = board.interfaces.find((i) => i.id === pin.function);
@@ -68,6 +74,11 @@ export function PinInspector({ board, pin, live, bench, onError, onHighlight }: 
                 )}
                 {iface.holders.length > 0 && (
                   <p className="mt-1 text-warn">Порт {iface.device} открыт: {iface.holders.join(", ")}.</p>
+                )}
+                {iface.enabled && !iface.locked && SDK_SNIPPET[iface.kind] && (
+                  <p className="mt-1 text-muted">
+                    В скрипте: <span className="font-mono text-fg">{SDK_SNIPPET[iface.kind](iface.controller)}</span>
+                  </p>
                 )}
               </>
             ) : (

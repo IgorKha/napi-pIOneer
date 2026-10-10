@@ -282,12 +282,12 @@ interfaces:
   spi1:
     title: SPI1
     dt: spi1
-    overlays: [rk3308-spi1]
+    overlays: [rk3308-spi1-spidev]
     pins: { J10-14: MOSI, J10-16: MISO, J10-15: CLK, J10-13: CSN0 }
   spi2:
     title: SPI2
     dt: spi2
-    overlays: [rk3308-spi2]
+    overlays: [rk3308-spi2-spidev]
     pins: { J9-19: MOSI, J9-21: MISO, J9-23: CLK, J9-24: CSN0 }
   pwm2:
     title: PWM2 (аппаратный)

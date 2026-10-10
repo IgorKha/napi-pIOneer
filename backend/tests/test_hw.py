@@ -73,7 +73,7 @@ def test_claim_many_atomic(hw):
 
 def test_release_all(bench, hw):
     hw.acquire("p1", "Тест", "J9-7", "gpio_out", initial=True)
-    hw.i2c("p1", "Тест", 1, 0x50)
+    hw.i2c("p1", "Тест", "i2c1", 0x50)
     hw.release("p1")
     assert bench.level("J9-7") is False
     assert hw.res.claims == {}
@@ -95,39 +95,56 @@ def test_adc(bench, hw):
     assert hw.value("J9-26") == pytest.approx(0.59, abs=0.002)
 
 
-# ---- шины
+# ---- шины (по интерфейсу из boards/napi-c.yaml, как в SDK)
 def test_i2c_address_exclusive_bus_shared(bench, hw):
     bench.add("i2c_regs", bus=1, addr=0x50)
-    dev = hw.i2c("a", "Дисплей", 1, 0x50)
+    dev = hw.i2c("a", "Дисплей", "i2c1", 0x50)
     dev.write(bytes([0, 42]))
     assert dev.write_read(b"\x00", 1) == b"\x2a"
-    hw.i2c("b", "Датчик", 1, 0x51)  # другой адрес на той же шине — можно
-    with pytest.raises(ResourceConflict, match='i2c:1@0x50 занят.*"Дисплей"'):
-        hw.i2c("b", "Датчик", 1, 0x50)
+    hw.i2c("b", "Датчик", "i2c1", 0x51)  # другой адрес на той же шине — можно
+    with pytest.raises(ResourceConflict, match='i2c1@0x50 занят.*"Дисплей"'):
+        hw.i2c("b", "Датчик", "i2c1", 0x50)
 
 
-def test_bus_must_be_enabled_in_uenv(hw):
-    with pytest.raises(ResourceConflict, match="I2C0 в uEnv"):
-        hw.i2c("a", "x", 0, 0x50)  # i2c0 по умолчанию выключен
-    with pytest.raises(ResourceConflict, match="SPI1 выключена: включите SPI1"):
-        hw.spi("a", "x", 1, 0)
-    with pytest.raises(ResourceConflict, match="ttyS4 выключена"):
-        hw.uart("a", "x", "ttyS4")
+def test_bus_must_be_enabled(hw):
+    with pytest.raises(ResourceConflict, match=r"i2c0 выключен: нужен оверлей `rk3308-i2c0` \(J9-23 SDA, J9-24 SCL\)"):
+        hw.i2c("a", "x", "i2c0", 0x50)  # i2c0 по умолчанию выключен
+    with pytest.raises(ResourceConflict, match="spi1 выключен: нужен оверлей `rk3308-spi1-spidev`"):
+        hw.spi("a", "x", "spi1", 0)
+    with pytest.raises(ResourceConflict, match=r"uart4 выключен.*\(J10-5 TX, J10-7 RX\)"):
+        hw.uart("a", "x", "uart4")
     with pytest.raises(ResourceConflict, match="занят системой"):
-        hw.uart("a", "x", "/dev/ttyS0")
+        hw.uart("a", "x", "uart0")
     with pytest.raises(ResourceConflict, match="0x03…0x77"):
-        hw.i2c("a", "x", 1, 0x01)
+        hw.i2c("a", "x", "i2c1", 0x01)
+    with pytest.raises(ResourceConflict, match="нет интерфейса 'i2c5'.*есть: i2c0, i2c1, i2c3"):
+        hw.i2c("a", "x", "i2c5", 0x50)
+    with pytest.raises(ResourceConflict, match="нет интерфейса 'uart1'"):
+        hw.i2c("a", "x", "uart1", 0x50)  # не та шина
+
+
+def test_mux_variant_resolved(board, hw):
+    """Имя без варианта -> включённый вариант; ресурс — по контроллеру."""
+    assert board.bus_interface("uart2").id == "uart2_m0"
+    assert board.bus_interface("i2c3").id == "i2c3_m0"
+    assert board.bus_interface("i2c3_m0").id == "i2c3_m0"
+    with pytest.raises(Exception, match="i2c3_m1 выключен"):
+        board.bus_interface("i2c3_m1")
+    hw.i2c("a", "x", "i2c3", 0x20)
+    assert "i2c3@0x20" in hw.res.claims
+    with pytest.raises(ResourceConflict, match="i2c3@0x20 занят"):
+        hw.i2c("b", "y", "i2c3_m0", 0x20)  # тот же контроллер под точным именем
 
 
 def test_uart_exclusive_and_loopback(bench, hw):
     bench.add("uart_loopback", device="/dev/ttyS3")
-    port = hw.uart("a", "Modbus", "ttyS3", baud=19200)
+    port = hw.uart("a", "Modbus", "uart3", baud=19200)
     port.write(b"\x01\x03")
     assert port.read(8, timeout=0.1) == b"\x01\x03"
-    with pytest.raises(ResourceConflict, match="uart:ttyS3"):
-        hw.uart("b", "Другой", "ttyS3")
+    with pytest.raises(ResourceConflict, match="uart3 занят"):
+        hw.uart("b", "Другой", "uart3")
     hw.release("a")
-    hw.uart("b", "Другой", "ttyS3")  # после освобождения порт снова открывается
+    hw.uart("b", "Другой", "uart3")  # после освобождения порт снова открывается
 
 
 def test_spi_resource_id(board):
@@ -139,9 +156,10 @@ def test_spi_resource_id(board):
     b = load_board(BOARD_FILE, [*DEFAULT_OVERLAYS, "rk3308-spi2-spidev"])
     # spi2 конфликтует с uart1/uart2 по пинам, но тут проверяем только захват CS
     h = HW(b, BenchHAL(b), ResourceManager(b))
-    h.spi("a", "x", 2, 0)
+    h.spi("a", "x", "spi2", 0)
+    assert "spi2.cs0" in h.res.claims
     with pytest.raises(ResourceConflict, match="CSN0"):
-        h.spi("a", "x", 2, 1)
+        h.spi("a", "x", "spi2", 1)
 
 
 def test_softpwm_thread_on_output(bench, board):

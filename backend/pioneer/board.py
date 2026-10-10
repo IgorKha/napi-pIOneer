@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -51,6 +52,27 @@ class Interface:
 
     def matches(self, overlay: str) -> bool:
         return any(overlay == ov or overlay.startswith(ov + "-") for ov in self.overlays)
+
+    @property
+    def controller(self) -> str:
+        """Имя контроллера без mux-варианта: uart2_m0 -> uart2, i2c3_m1 -> i2c3."""
+        return _MUX.sub("", self.id)
+
+    @property
+    def kind(self) -> str:
+        """Тип шины: uart / i2c / spi / pwm."""
+        return re.sub(r"\d+$", "", self.controller)
+
+    @property
+    def number(self) -> int:
+        """Номер контроллера (spi2 -> 2) — для HAL (/dev/i2c-N, spidevN.CS)."""
+        return int(re.search(r"\d+$", self.controller)[0])
+
+    def describe_pins(self) -> str:
+        return ", ".join(f"{p} {role}" for p, role in self.pins.items())
+
+
+_MUX = re.compile(r"_m\d+$")
 
 
 @dataclass
@@ -160,6 +182,28 @@ class Board:
     def active_interfaces(self) -> list[str]:
         """Включённые в uEnv.txt — от них считается план правки uEnv."""
         return [i for i in self.interfaces if self.uenv_enabled(i)]
+
+    def bus_interface(self, name: str, kind: str | None = None) -> Interface:
+        """Включённый интерфейс по имени из SDK: контроллер без mux-варианта (`uart2`, `i2c3`)
+        резолвится в активный вариант по живому DT/uEnv; точное имя (`i2c3_m0`) тоже годится.
+        Ошибка (InterfaceError) объясняет, какой оверлей включить и какие пины он займёт."""
+        name = name.strip().lower()
+        variants = ([self.interfaces[name]] if name in self.interfaces else
+                    [i for i in self.interfaces.values() if i.controller == name])
+        if kind:
+            variants = [i for i in variants if i.kind == kind]
+        if not variants:
+            known = sorted({i.controller for i in self.interfaces.values() if not kind or i.kind == kind})
+            raise InterfaceError(f"нет интерфейса {name!r} на {self.title}; есть: {', '.join(known)}")
+        for iface in variants:
+            if self.interface_enabled(iface.id):
+                if iface.locked:
+                    raise InterfaceError(f"{name} — {iface.title}, занят системой")
+                return iface
+        if any(self.interface_pending(i.id) for i in variants):
+            raise InterfaceError(f"{name} включён в uEnv.txt, но ещё не применён — перезагрузите плату")
+        need = " или ".join(f"`{i.overlays[0]}` ({i.describe_pins()})" for i in variants)
+        raise InterfaceError(f"{name} выключен: нужен оверлей {need} в uEnv.txt и перезагрузка платы")
 
     def conflicts(self, iface_id: str) -> list[str]:
         me = self.interfaces[iface_id]

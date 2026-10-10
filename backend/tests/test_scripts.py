@@ -114,11 +114,11 @@ def test_i2c_from_script(sm, bench):
     bench.add("i2c_regs", "eeprom", bus=1, addr=0x50)
     code = '''
 from pioneer.sdk import I2C, log
-dev = I2C(1, 0x50)
+dev = I2C("i2c1", 0x50)
 dev.write_reg(0x10, b"\\x2a")
 log("read", dev.read_reg(0x10)[0])
 try:
-    I2C(1, 0x51).read(1)
+    I2C("i2c1", 0x51).read(1)
 except Exception as e:
     log("nack", type(e).__name__)
 '''
@@ -160,3 +160,16 @@ def test_two_scripts_conflict_on_output(sm, hw):
     assert wait_for(lambda: sm.status(b).state == "error", 5)
     assert "J9-7 занят" in sm.status(b).error and "скрипт «тест»" in sm.status(b).error
     assert sm.status(a).state == "running"
+
+
+def test_slow_handler_warns(sm):
+    code = '''
+from pioneer.sdk import every, sleep
+@every(0.02)
+def busy():
+    sleep(0.15)
+'''
+    sid = start_and_wait(sm, code)
+    assert wait_for(lambda: "обработчик busy() выполнялся" in log_text(sm, sid), 3)
+    sm.stop(sid)
+    assert log_text(sm, sid).count("блокировал цикл") == 1  # не чаще раза в 10 с

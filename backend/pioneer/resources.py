@@ -2,13 +2,14 @@
 
 Ресурсы:
 - пин: "J9-7" в рантайм-режиме (gpio_in / gpio_out / soft_pwm / adc);
-- устройство на I2C: "i2c:1@0x3c" — шина общая, адрес эксклюзивный;
-- SPI-устройство: "spi:1.0" (шина.CS) — эксклюзивно;
-- UART: "uart:ttyS3" — эксклюзивно;
+- устройство на I2C: "i2c1@0x3c" — шина общая, адрес эксклюзивный;
+- SPI-устройство: "spi2.cs0" — эксклюзивно;
+- UART: "uart3" — эксклюзивно;
 - встроенный LED: "led:user" — эксклюзивно (через /sys/class/leds).
 
-Шины доступны, только если их интерфейс включён в uEnv.txt; их пины при этом уже
-отданы интерфейсу (Board.function) и как GPIO недоступны.
+Шины адресуются по контроллеру из boards/*.yaml без mux-варианта (i2c3, а не i2c3_m0) —
+как в SDK. Доступны, только если интерфейс включён (живой DT / uEnv.txt); их пины при
+этом уже отданы интерфейсу (Board.function) и как GPIO недоступны.
 
 gpio_out / soft_pwm — эксклюзивно; gpio_in / adc — разделяемые (рефкаунт владельцев).
 Пакет захватов атомарен: либо все, либо ни одного.
@@ -20,28 +21,28 @@ import threading
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pioneer.board import Board, Interface, RuntimeMode
+from pioneer.board import Board, Interface, InterfaceError, RuntimeMode
 
 BusMode = Literal["i2c", "spi", "uart", "led"]
 Mode = RuntimeMode | BusMode
 SHARED: frozenset[str] = frozenset({"gpio_in", "adc"})
 
-_I2C = re.compile(r"^i2c:(\d+)@0x([0-9a-f]{1,2})$")
-_SPI = re.compile(r"^spi:(\d+)\.(\d+)$")
-_UART = re.compile(r"^uart:(tty\w+)$")
+_I2C = re.compile(r"^(i2c\d+)@0x([0-9a-f]{1,2})$")
+_SPI = re.compile(r"^(spi\d+)\.cs(\d+)$")
+_UART = re.compile(r"^(uart\d+)$")
 _LED = re.compile(r"^led:(\w+)$")
 
 
-def i2c_id(bus: int, addr: int) -> str:
-    return f"i2c:{bus}@0x{addr:02x}"
+def i2c_id(controller: str, addr: int) -> str:
+    return f"{controller}@0x{addr:02x}"
 
 
-def spi_id(bus: int, cs: int) -> str:
-    return f"spi:{bus}.{cs}"
+def spi_id(controller: str, cs: int) -> str:
+    return f"{controller}.cs{cs}"
 
 
-def uart_id(device: str) -> str:
-    return f"uart:{device.removeprefix('/dev/')}"
+def uart_id(controller: str) -> str:
+    return controller
 
 
 def led_id(led: str) -> str:
@@ -67,10 +68,10 @@ class ResourceManager:
 
     # ---- проверки
     def check(self, owner: str, resource: str, mode: Mode) -> None:
-        if ":" in resource:
-            self._check_bus(resource, mode)
-        else:
+        if resource in self.board.pins:
             self._check_pin(resource, mode)
+        else:
+            self._check_bus(resource, mode)
         claim = self.claims.get(resource)
         if claim is None or owner in claim.owners and len(claim.owners) == 1:
             return
@@ -98,22 +99,18 @@ class ResourceManager:
     def _check_bus(self, resource: str, mode: Mode) -> None:
         if m := _I2C.match(resource):
             self._need(mode, "i2c", resource)
-            bus, addr = int(m[1]), int(m[2], 16)
-            if not 0x03 <= addr <= 0x77:
+            if not 0x03 <= int(m[2], 16) <= 0x77:
                 raise ResourceConflict(f"{resource}: адрес I2C 0x03…0x77")
-            self._enabled_iface(lambda i: i.device == f"/dev/i2c-{bus}", f"I2C-шина {bus}")
+            self._enabled_iface(m[1], "i2c")
         elif m := _SPI.match(resource):
             self._need(mode, "spi", resource)
-            bus, cs = int(m[1]), int(m[2])
-            iface = self._enabled_iface(lambda i: i.id == f"spi{bus}", f"SPI{bus}")
+            iface = self._enabled_iface(m[1], "spi")
             cs_roles = {r for r in iface.pins.values() if r.startswith("CSN")}
-            if f"CSN{cs}" not in cs_roles:
+            if f"CSN{m[2]}" not in cs_roles:
                 raise ResourceConflict(f"{resource}: на гребёнке выведены только {', '.join(sorted(cs_roles))}")
         elif m := _UART.match(resource):
             self._need(mode, "uart", resource)
-            iface = self._enabled_iface(lambda i: i.device == f"/dev/{m[1]}", m[1])
-            if iface.locked:
-                raise ResourceConflict(f"{m[1]} — {iface.title}, занят системой")
+            self._enabled_iface(m[1], "uart")
         elif m := _LED.match(resource):
             self._need(mode, "led", resource)
             if m[1] not in self.board.leds:
@@ -126,17 +123,11 @@ class ResourceManager:
         if mode != expected:
             raise ResourceConflict(f"{resource}: режим должен быть {expected}, а не {mode}")
 
-    def _enabled_iface(self, match, what: str) -> Interface:
-        candidates = [i for i in self.board.interfaces.values() if match(i)]
-        for i in candidates:
-            if self.board.interface_enabled(i.id):
-                return i
-        if not candidates:
-            raise ResourceConflict(f"{what}: нет на гребёнке Napi-C")
-        names = " или ".join(i.title for i in candidates)
-        if any(self.board.interface_pending(i.id) for i in candidates):
-            raise ResourceConflict(f"{what} включена в uEnv.txt, но ещё не применена — перезагрузите плату")
-        raise ResourceConflict(f"{what} выключена: включите {names} в uEnv.txt и перезагрузите плату")
+    def _enabled_iface(self, controller: str, kind: str) -> Interface:
+        try:
+            return self.board.bus_interface(controller, kind)
+        except InterfaceError as e:
+            raise ResourceConflict(str(e)) from None
 
     # ---- захват
     def claim_many(self, owner: str, owner_name: str, wants: dict[str, Mode]) -> None:

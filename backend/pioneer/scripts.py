@@ -177,7 +177,7 @@ class _Runner:
             hw.set_pwm(a["pin"], freq=a.get("freq"), duty=a.get("duty"))
             return None
         if op == "i2c_open":
-            return self._handle_id(hw.i2c(o, n, a["bus"], a["addr"]))
+            return self._handle_id(hw.i2c(o, n, a["iface"], a["addr"]))
         if op == "i2c":
             dev = self.handles[a["h"]]
             data = bytes.fromhex(a.get("data", ""))
@@ -188,11 +188,11 @@ class _Runner:
                 return dev.read(a["n"]).hex()
             return dev.write_read(data, a["n"]).hex()
         if op == "spi_open":
-            return self._handle_id(hw.spi(o, n, a["bus"], a["cs"], mode=a["mode"], speed_hz=a["speed_hz"]))
+            return self._handle_id(hw.spi(o, n, a["iface"], a["cs"], mode=a["mode"], speed_hz=a["speed_hz"]))
         if op == "spi_xfer":
             return self.handles[a["h"]].xfer(bytes.fromhex(a["data"])).hex()
         if op == "uart_open":
-            return self._handle_id(hw.uart(o, n, a["device"], baud=a["baud"]))
+            return self._handle_id(hw.uart(o, n, a["iface"], baud=a["baud"]))
         if op == "uart_write":
             self.handles[a["h"]].write(bytes.fromhex(a["data"]))
             return None

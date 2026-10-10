@@ -28,7 +28,7 @@ def get_board(request: Request) -> dict:
         "overlays": board.overlays,
         "live_dt": board.dt is not None,  # занятость из живого Device Tree (на плате)
         "interfaces": [
-            {"id": i.id, "title": i.title, "device": i.device, "locked": i.locked, "note": i.note,
+            {"id": i.id, "controller": i.controller, "kind": i.kind, "title": i.title, "device": i.device, "locked": i.locked, "note": i.note,
              "enabled": board.interface_enabled(i.id),  # сейчас
              "enabled_in_uenv": board.uenv_enabled(i.id),  # после перезагрузки
              "pending": board.interface_pending(i.id),
@@ -57,9 +57,9 @@ def get_board(request: Request) -> dict:
             }
             for p in board.pins.values()
         ],
-        # ресурсы шин (i2c:1@0x3c, uart:ttyS3, …)
+        # ресурсы шин (i2c1@0x3c, uart3, spi2.cs0, led:user)
         "bus_claims": {rid: {"mode": c.mode, "owners": c.owners}
-                       for rid, c in claims.items() if ":" in rid},
+                       for rid, c in claims.items() if rid not in board.pins},
     }
 
 

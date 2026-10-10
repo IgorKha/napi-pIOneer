@@ -91,9 +91,9 @@ def test_resource_messages(dboard):
     hw = HW(dboard, BenchHAL(dboard), ResourceManager(dboard))
     with pytest.raises(ResourceConflict, match="J10-17 занят драйвером ядра: serial1 \\(rts-gpios\\)"):
         hw.acquire("p", "x", "J10-17", "gpio_out")
-    with pytest.raises(ResourceConflict, match="ещё не применена — перезагрузите"):
-        hw.uart("p", "x", "ttyS4")
-    hw.uart("p", "x", "ttyS1")  # живой — открывается
+    with pytest.raises(ResourceConflict, match="uart4 включён в uEnv.txt, но ещё не применён — перезагрузите"):
+        hw.uart("p", "x", "uart4")
+    hw.uart("p", "x", "uart1")  # живой — открывается
 
 
 def test_explicit_conflicts(board):
