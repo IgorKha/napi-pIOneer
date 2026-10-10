@@ -1,16 +1,21 @@
 [Unit]
-Description=napi-pioneer core
+Description=napi-pioneer core (визуальное программирование Napi-C)
 After=network.target
 
 [Service]
 Type=simple
+# root: GPIO, /sys/class/leds, /proc/*/fd (кто держит порты), SCHED_FIFO для soft-PWM
 Environment=PYTHONPATH=/mount/rfs/rw/.pioneer/app/backend
 Environment=PIONEER_CONFIG=/mount/rfs/rw/.pioneer/data/config.toml
+Environment=PYTHONUNBUFFERED=1
+WorkingDirectory=/mount/rfs/rw/.pioneer/app/backend
 ExecStart=/usr/bin/python3 -m pioneer
-WorkingDirectory=/mount/rfs/rw/.pioneer/app
 Restart=on-failure
-RestartSec=2
-# soft-PWM и чтение edge-событий — SCHED_FIFO (spec 11.1)
+RestartSec=3
+# старт ≈ 15 с (импорт FastAPI на A35); остановка: выходы в safe state, LED — системный триггер
+TimeoutStartSec=90
+TimeoutStopSec=20
+KillMode=mixed
 LimitRTPRIO=99
 
 [Install]

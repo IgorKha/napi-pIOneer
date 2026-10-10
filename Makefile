@@ -24,8 +24,8 @@ test:
 	cd backend && $(PY) pytest -q
 	cd frontend && npm run typecheck
 
-deploy: build  ## rsync на плату + идемпотентный install.sh
-	# раскладка как в репо: REPO_ROOT в config.py = app/
-	rsync -azR --delete -e "ssh -i $(SSH_KEY)" --exclude __pycache__ \
-		backend/pioneer boards deploy frontend/dist $(BOARD):$(APP_DIR)/
+deploy: build  ## код на плату (tar по ssh — rsync на плате нет) + идемпотентный install.sh
+	COPYFILE_DISABLE=1 tar czf - --exclude __pycache__ backend/pioneer boards deploy frontend/dist \
+		| ssh -i $(SSH_KEY) $(BOARD) 'set -e; mkdir -p $(APP_DIR).new && tar xzf - -C $(APP_DIR).new 2>/dev/null; \
+		  rm -rf $(APP_DIR).old; [ -d $(APP_DIR) ] && mv $(APP_DIR) $(APP_DIR).old; mv $(APP_DIR).new $(APP_DIR)'
 	ssh -i $(SSH_KEY) $(BOARD) 'sh $(APP_DIR)/deploy/install.sh'
