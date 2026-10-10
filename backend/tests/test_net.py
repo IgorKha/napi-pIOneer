@@ -141,3 +141,50 @@ def test_json_get(hw):
         assert rt.sample("j", "text").value == "3,5" and rt.sample("j", "flag").value is True
     finally:
         e.close()
+
+
+def test_remote_command_arbiter_state(client):
+    """idea 003, критерий: крутилка ↔ команда servo.set через Арбитр, ответ и состояние."""
+    client.post(f"{API}/bench/models", json={"kind": "voltage", "config": {"pin": "J9-26", "volts": 0.9}})
+    remote = "/pioneer/api/remote"
+    assert client.post(f"{remote}/cmd/servo.set", json={}).status_code == 403  # ключ не задан
+    client.put(f"{API}/secrets", json={"remote_api_key": "k3y"})
+    K = {"X-Pioneer-Key": "k3y"}
+    pid = client.post(f"{API}/projects", json={"name": "Серва"}).json()["id"]
+    r = client.post(f"{API}/projects/{pid}/ops", json={"ops": [
+        {"op": "add_node", "id": "adc", "type": "builtin.analog_in", "params": {"pin": "J9-26", "interval_ms": 20, "average": 1}},
+        {"op": "add_node", "id": "map", "type": "builtin.map_range", "inputs": {"from_max": 1.8, "to_max": 180}},
+        {"op": "add_node", "id": "cmd", "type": "builtin.command",
+         "params": {"name": "servo.set", "args_spec": "angle: Number 0..180"}},
+        {"op": "add_node", "id": "arb", "type": "builtin.arbiter"},
+        {"op": "add_node", "id": "st", "type": "builtin.state", "params": {"name": "servo.angle"}},
+        {"op": "add_node", "id": "rep", "type": "builtin.reply"},
+        {"op": "connect", "from": ["adc", "volts"], "to": ["map", "value"]},
+        {"op": "connect", "from": ["map", "result"], "to": ["arb", "a"]},
+        {"op": "connect", "from": ["cmd", "number"], "to": ["arb", "b"]},
+        {"op": "connect", "from": ["arb", "value"], "to": ["st", "value"]},
+        {"op": "connect", "from": ["arb", "value"], "to": ["rep", "body"]},
+        {"op": "connect", "from": ["cmd", "received"], "to": ["rep", "send"]},
+    ]})
+    assert r.status_code == 200, r.json()
+    assert client.post(f"{API}/projects/{pid}/start").json()["state"] == "running"
+    assert wait_for(lambda: client.get(f"{remote}/state/servo.angle", headers=K).json().get("value") == 90.0, 2)
+
+    r = client.post(f"{remote}/cmd/servo.set", headers=K, json={"id": "1", "args": {"angle": 30}})
+    assert r.json() == {"id": "1", "ok": True, "result": 30.0}
+    st = client.get(f"{remote}/state/servo.angle", headers=K).json()
+    assert st["value"] == 30.0 and st["source"] == "remote:http"
+    # тот же id — ответ из кэша, граф не трогается
+    assert client.post(f"{remote}/cmd/servo.set", headers=K, json={"id": "1", "args": {"angle": 99}}).json()["result"] == 30.0
+    bad = client.post(f"{remote}/cmd/servo.set", headers=K, json={"args": {"angle": 500}})
+    assert bad.status_code == 422 and "0…180" in bad.json()["error"]
+    assert client.post(f"{remote}/cmd/nope", headers=K, json={}).status_code == 404
+    assert client.post(f"{remote}/cmd/servo.set", headers={"X-Pioneer-Key": "x"}, json={}).status_code == 401
+    # крутилку повернули — управление вернулось к ней
+    bench = client.get(f"{API}/bench").json()["models"][0]["id"]
+    client.post(f"{API}/bench/models/{bench}/actions/set", json={"volts": 1.8})
+    assert wait_for(lambda: client.get(f"{remote}/state/servo.angle", headers=K).json()["value"] > 179, 2)  # 10 бит: 1.8 В читается как ~1.798 В
+    d = client.get(f"{remote}/describe", headers=K).json()
+    assert d["commands"] == [{"name": "servo.set", "args": {"angle": {"type": "Number", "min": 0.0, "max": 180.0}},
+                              "project": "Серва"}]
+    assert d["states"][0]["name"] == "servo.angle" and d["states"][0]["source"].startswith("adc")

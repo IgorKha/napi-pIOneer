@@ -52,6 +52,15 @@ function NodePanel({ project, node, schema, board, live, running, apply }: Props
         </div>
       )}
 
+      {schema.id === "builtin.command" && typeof node.params.name === "string" && node.params.name && (
+        <div className="rounded border border-line bg-bg px-2 py-1.5">
+          <div className="text-muted">Вызов (ключ — секрет remote_api_key):</div>
+          <code className="block break-all font-mono text-fg">
+            {`curl -X POST -H 'X-Pioneer-Key: …' -d '{"id":"1","args":{…}}' ${location.origin}/pioneer/api/remote/cmd/${node.params.name}`}
+          </code>
+        </div>
+      )}
+
       {schema.params.length > 0 && (
         <section className="flex flex-col gap-2.5">
           <h3 className="font-semibold uppercase tracking-wide text-muted">Параметры</h3>

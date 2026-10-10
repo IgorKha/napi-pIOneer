@@ -208,3 +208,160 @@ class JsonGet(Node):
         self.number.set(num if num is not None else 0.0)
         self.text.set("" if cur is None else cur if isinstance(cur, str) else json.dumps(cur, ensure_ascii=False))
         self.flag.set(cur not in (None, False, 0, "", "0", "false", "off") and cur != [] and cur != {})
+
+
+# ---------------------------------------------------------------- удалённые команды (idea 003)
+CMD_NAME = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,63}$")
+ARG = re.compile(r"^\s*([a-z_][a-z0-9_]*)\s*:\s*(Number|Bool|String|Json)\s*(?:(-?[\d.]+)\s*\.\.\s*(-?[\d.]+))?\s*$")
+
+
+def parse_args_spec(spec: str) -> dict[str, dict]:
+    """«angle: Number 0..180; on: Bool» → {"angle": {"type": "Number", "min": 0, "max": 180}, ...}."""
+    out: dict[str, dict] = {}
+    for part in [p for p in re.split(r"[;\n]", spec or "") if p.strip()]:
+        m = ARG.match(part)
+        if not m:
+            raise NodeError(f"аргумент {part.strip()!r}: формат «имя: Number 0..180», типы Number, Bool, String, Json")
+        d: dict = {"type": m[2]}
+        if m[3] is not None:
+            if m[2] != "Number":
+                raise NodeError(f"{m[1]}: диапазон только для Number")
+            d["min"], d["max"] = float(m[3]), float(m[4])
+        out[m[1]] = d
+    return out
+
+
+def check_args(spec: dict[str, dict], args: dict) -> dict:
+    """Проверить аргументы команды по схеме; ValueError с понятным текстом."""
+    if not isinstance(args, dict):
+        raise ValueError("args должен быть объектом")
+    extra = set(args) - set(spec)
+    if extra:
+        raise ValueError(f"неизвестные аргументы: {', '.join(sorted(extra))}")
+    out = {}
+    for name, d in spec.items():
+        if name not in args:
+            raise ValueError(f"нет аргумента {name}")
+        v = args[name]
+        t = d["type"]
+        if t == "Number":
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ValueError(f"{name}: ожидается число")
+            if "min" in d and not d["min"] <= v <= d["max"]:
+                raise ValueError(f"{name}: допустимо {d['min']:g}…{d['max']:g}")
+            v = float(v)
+        elif t == "Bool" and not isinstance(v, bool):
+            raise ValueError(f"{name}: ожидается true/false")
+        elif t == "String" and not isinstance(v, str):
+            raise ValueError(f"{name}: ожидается строка")
+        out[name] = v
+    return out
+
+
+@node("builtin.command", title="Команда", category=CAT, color=COLOR, doc="""
+Объявляет команду API проекта, которую можно вызвать удалённо:
+`POST https://<плата>/pioneer/api/remote/cmd/<имя>` с заголовком `X-Pioneer-Key` (секрет
+`remote_api_key` на странице «Секреты») и телом `{"id": "1", "args": {"angle": 90}}`.
+
+Вызвать можно только объявленные команды; аргументы проверяются по схеме до того, как
+попадут в граф (`angle: Number 0..180; on: Bool; mode: String`). Ответ —
+`{"id", "ok": true, "result": …}`: тело ноды «Ответ», либо просто подтверждение, когда
+граф обработал команду; не уложился в 5 с — `{"ok": false, "error": "timeout"}`.
+
+Выходы: «Пришла» (payload — аргументы), «Аргументы» (Json — дальше «Поле JSON»), «Число» и
+«Флаг» — первый аргумент типа Number / Bool, «Запрос» — для «Ответа».
+
+Пример: Команда `light.set` (`on: Bool`) → Флаг → Арбитр ← Кнопка → Цифровой выход;
+Состояние `light` ← выход Арбитра.
+""")
+class Command(Node):
+    name = Param("str", "", title="Имя", required=True, doc="латиница, цифры, . _ -: например servo.set")
+    args_spec = Param("str", "", title="Аргументы", doc="«angle: Number 0..180; on: Bool»; пусто — без аргументов")
+    received = Out("Event", title="Пришла", doc="payload — аргументы")
+    args = Out("Json", title="Аргументы")
+    number = Out("Number", title="Число", doc="Первый аргумент типа Number")
+    flag = Out("Bool", title="Флаг", doc="Первый аргумент типа Bool")
+    request = Out("Request", title="Запрос", doc="Контекст для ноды «Ответ»")
+
+    def setup(self):
+        if not CMD_NAME.match(self.name or ""):
+            raise NodeError("имя: латиница в нижнем регистре, цифры, . _ - (до 64 знаков)")
+        self.spec = parse_args_spec(self.args_spec)
+
+    def declarations(self):
+        try:
+            spec = parse_args_spec(self.args_spec)
+        except NodeError:
+            spec = {}
+        return [Declaration("command", self.name or "", {"args": spec})]
+
+    def deliver(self, args: dict, ctx):
+        self.request.set(ctx)
+        self.args.set(args)
+        num = next((v for k, v in args.items() if self.spec[k]["type"] == "Number"), None)
+        flg = next((v for k, v in args.items() if self.spec[k]["type"] == "Bool"), None)
+        if num is not None:
+            self.number.set(num)
+        if flg is not None:
+            self.flag.set(flg)
+        self.received.emit(args)
+
+
+@node("builtin.state", title="Состояние", category=CAT, color=COLOR, doc="""
+Публикует значение как состояние проекта: сервер читает его
+`GET https://<плата>/pioneer/api/remote/state/<имя>` (ключ — как у команд), список всех —
+`GET …/remote/describe`. Позже (MQTT) — retained-топик `pioneer/<плата>/state/<имя>`.
+
+Пример: Аналоговый вход → Формула (°C) → Состояние `temp`.
+""")
+class State(Node):
+    name = Param("str", "", title="Имя", required=True, doc="латиница, цифры, . _ -")
+    value = In("Any", title="Значение")
+
+    def setup(self):
+        if not CMD_NAME.match(self.name or ""):
+            raise NodeError("имя: латиница в нижнем регистре, цифры, . _ - (до 64 знаков)")
+
+    def declarations(self):
+        return [Declaration("state", self.name or "", {})]
+
+    def start(self):
+        self.on_change({"value"})
+
+    def on_change(self, changed):
+        s = self.sample("value")
+        self.current = {"value": jsonable(s.value if s else self.value, 100_000),
+                        "t": s.ts if s else None, "source": str(s.origin) if s else None}
+        self.show(self.current)
+
+
+@node("builtin.arbiter", title="Арбитр", category="Логика", color="#3b7a57", doc="""
+Несколько источников одного значения (крутилка, команда сервера, слайдер пульта):
+на выходе — значение того входа, который менялся последним. «Источник» — кто сейчас
+главный (`ui:…`, `remote:http`, `gpio:J10-2`, `adc:J9-26`…).
+
+Пример: Аналоговый вход → A, Команда servo.set (Число) → B → Арбитр → Серва: управление
+у того, кто тронул последним.
+""")
+class Arbiter(Node):
+    a = In("Number", 0.0, title="A")
+    b = In("Number", 0.0, title="B")
+    c = In("Number", 0.0, title="C")
+    value = Out("Number", title="Значение")
+    source = Out("String", title="Источник")
+
+    def start(self):
+        self.on_change({"a", "b", "c"})
+
+    def on_change(self, changed):
+        best = None
+        for name in ("a", "b", "c"):
+            s = self.sample(name)
+            if s is not None and (best is None or s.ts > best[1].ts):
+                best = (name, s)
+        if best is None:
+            self.value.set(self.a)
+            self.source.set("")
+            return
+        self.value.set(getattr(self, best[0]))
+        self.source.set(str(best[1].origin))

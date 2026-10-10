@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import auth, bench, blocks, board, help, hooks, projects, scripts, secrets
+from pioneer.api import auth, bench, blocks, board, help, hooks, projects, remote, scripts, secrets
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
@@ -76,6 +76,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     public.add_api_route("/health", health)
     public.include_router(auth.router)
     public.include_router(hooks.router)  # своя защита — токен ноды
+    public.include_router(remote.router)  # своя защита — ключ remote_api_key
     protected = APIRouter(dependencies=[Depends(auth.require_session)])
     protected.include_router(board.router)
     protected.include_router(bench.router)
