@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type BenchModel, type Board, type InterfacePlan, type Pin, type PinState, type RuntimeMode } from "../api";
+import { href, ownerRoute } from "../route";
 import { Tip } from "../Tip";
 import { BenchSection } from "./BenchSection";
 import { formatValue, ifaceShort } from "./look";
@@ -265,15 +266,22 @@ function Btn({ active, onClick, children }: { active?: boolean; onClick: () => v
   );
 }
 
-/** Владельцы захвата. id вида "script:<id>" — задел под переход в скрипт по клику
- *  (страница скриптов: следующий шаг), пока — просто текст с подсказкой. */
-function Owners({ owners }: { owners: Record<string, string> }) {
+/** Владельцы захвата: полное имя — в подсказке; скрипт — ссылка, клик проваливает в него. */
+export function Owners({ owners }: { owners: Record<string, string> }) {
   const text = Object.values(owners).join(", ");
   return (
     <Tip text={text} className="block">
-      <span tabIndex={0} data-owners={Object.keys(owners).join(" ")}
-            className="block truncate text-muted outline-none focus-visible:text-fg">
-        {text}
+      <span className="block truncate text-muted">
+        {Object.entries(owners).map(([id, name], i) => {
+          const r = ownerRoute(id);
+          return (
+            <span key={id}>
+              {i > 0 && ", "}
+              {r ? <a href={href(r)} className="text-fg underline decoration-muted underline-offset-2 hover:decoration-fg">{name}</a>
+                 : <span tabIndex={0} className="outline-none focus-visible:text-fg">{name}</span>}
+            </span>
+          );
+        })}
       </span>
     </Tip>
   );

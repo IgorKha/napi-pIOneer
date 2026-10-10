@@ -1,6 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { api, setUnauthorizedHandler, type BenchModel, type Board } from "./api";
 import { BoardPage } from "./board/BoardPage";
+import { href, useRoute } from "./route";
+
+// Monaco (~3 МБ) грузится только на странице скриптов
+const ScriptsPage = lazy(() => import("./scripts/ScriptsPage").then((m) => ({ default: m.ScriptsPage })));
 import { Login } from "./Login";
 import { useLive, type LiveStatus } from "./useLive";
 
@@ -47,7 +51,12 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [initialBench, setInitialBench] = useState<BenchModel[] | null>(null);
-  const { pins: live, bench, leds, status } = useLive(initialBench, onUnauthorized);
+  const { pins: live, bench, leds, scriptLogs, scriptStatus, status } = useLive(initialBench, onUnauthorized);
+  const route = useRoute();
+  // плата с живыми захватами — для подсказок пинов в редакторе
+  const liveBoard = useMemo(() => board && {
+    ...board, pins: board.pins.map((p) => (live[p.id] ? { ...p, ...live[p.id] } : p)),
+  }, [board, live]);
 
   useEffect(() => {
     api.board().then((b) => {
@@ -68,8 +77,12 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         <span className="font-semibold tracking-tight">
           napi-p<span className="text-accent">IO</span>neer
         </span>
-        <span className="rounded bg-panel-2 px-2.5 py-1 text-xs">Плата</span>
-        <span className="cursor-not-allowed text-xs text-muted" title="Следующий шаг фазы 0">Скрипты</span>
+        {([["board", "Плата"], ["scripts", "Скрипты"]] as const).map(([page, title]) => (
+          <a key={page} href={href({ page })} aria-current={route.page === page ? "page" : undefined}
+             className={`rounded px-2.5 py-1 text-xs ${route.page === page ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>
+            {title}
+          </a>
+        ))}
         <div className="ml-auto flex items-center gap-3 text-xs text-muted">
           {board && (
             <span className={board.hal === "bench" ? "text-warn" : undefined}
@@ -85,7 +98,12 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         </div>
       </nav>
 
-      {board ? (
+      {route.page === "scripts" ? (
+        <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
+          <ScriptsPage board={liveBoard} selected={route.id} liveLogs={scriptLogs} liveStatus={scriptStatus}
+                       onError={showError} />
+        </Suspense>
+      ) : board ? (
         <BoardPage board={board} live={live} bench={bench} leds={leds} onError={showError} />
       ) : (
         <div className="p-8 text-muted">{loadError ? `Не удалось загрузить плату: ${loadError}` : "Загрузка…"}</div>

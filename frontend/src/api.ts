@@ -93,6 +93,34 @@ export interface BenchInfo {
   models: BenchModel[];
 }
 
+export interface ScriptStatus {
+  state: "stopped" | "running" | "exited" | "error";
+  pid: number | null;
+  started: number | null;
+  exit_code: number | null;
+  error: string | null;
+}
+
+export interface ScriptMeta {
+  id: string;
+  name: string;
+  autostart: boolean;
+  created: number;
+  updated: number;
+  status: ScriptStatus;
+}
+
+export interface LogLine {
+  t: number;
+  stream: "out" | "err" | "sys";
+  text: string;
+}
+
+export interface ScriptFull extends ScriptMeta {
+  code: string;
+  log: LogLine[];
+}
+
 export interface InterfacePlan {
   overlays: string[];
   enable: string[];
@@ -145,6 +173,13 @@ export const api = {
     call<InterfacePlan>("/board/interfaces/plan", { enable, disable }),
   led: (id: string, action: "on" | "off" | "trigger" | "release", trigger?: string) =>
     call<BoardLed>(`/board/leds/${id}`, { action, trigger }),
+  scripts: () => call<ScriptMeta[]>("/scripts"),
+  script: (id: string) => call<ScriptFull>(`/scripts/${id}`),
+  scriptCreate: (name: string, code?: string) => call<ScriptMeta>("/scripts", { name, code }),
+  scriptUpdate: (id: string, patch: { name?: string; code?: string; autostart?: boolean }) =>
+    call<ScriptMeta>(`/scripts/${id}`, patch, "PUT"),
+  scriptDelete: (id: string) => call(`/scripts/${id}`, undefined, "DELETE"),
+  scriptRun: (id: string, action: "start" | "stop" | "restart") => call<ScriptStatus>(`/scripts/${id}/${action}`, {}),
   bench: () => call<BenchInfo>("/bench"),
   benchAdd: (kind: string, config: Record<string, unknown>) =>
     call<BenchModel>("/bench/models", { kind, config }),

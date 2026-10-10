@@ -1,5 +1,5 @@
 import { api, type BoardLed, type LedState } from "../api";
-import { Tip } from "../Tip";
+import { Owners } from "./PinInspector";
 
 const MANUAL = "manual";
 const COMMON_TRIGGERS = ["heartbeat", "timer", "default-on", "mmc0", "mmc1", "none"];
@@ -25,11 +25,7 @@ export function LedPanel({ leds, live, run }: {
                              boxShadow: st.on ? `0 0 8px ${led.color}` : undefined }} />
               <span className="w-28 shrink-0 text-xs">{led.title}</span>
               {foreign ? (
-                <Tip text={Object.values(st.claim!.owners).join(", ")}>
-                  <span tabIndex={0} className="block w-48 truncate text-xs text-muted">
-                    {Object.values(st.claim!.owners).join(", ")}
-                  </span>
-                </Tip>
+                <span className="w-48 text-xs"><Owners owners={st.claim!.owners} /></span>
               ) : (
                 <>
                   <div className="flex gap-1">

@@ -86,7 +86,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         def spa(path: str) -> FileResponse:  # SPA: любые не-API пути -> index.html
             if path.startswith("api/"):
                 raise HTTPException(404)
-            return FileResponse(FRONTEND_DIST / "index.html")
+            # index.html не кэшируем: ассеты с хэшами, а новая сборка должна подхватываться сразу
+            return FileResponse(FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-cache"})
     return app
 
 
