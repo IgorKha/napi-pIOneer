@@ -365,6 +365,18 @@ export interface MqttState {
   status: { enabled: boolean; connected: boolean; error: string | null; broker: string; prefix: string };
 }
 
+export interface GroupFull {
+  id: string;
+  name: string;
+  rev: number;
+  type: string;
+  graph: Graph;
+  inputs: { name: string; title: string; type: SocketType; targets: [string, string][] }[];
+  outputs: { name: string; title: string; type: SocketType; source: [string, string] }[];
+  node_types: Record<string, NodeTypeSchema>;
+  validation: Validation;
+}
+
 export interface BlockMeta {
   id: string;
   name: string;
@@ -409,6 +421,9 @@ export const api = {
   projectLive: (id: string) => call<ProjectLive>(`/projects/${id}/live`),
   projectUi: (id: string, node: string, value: unknown) => call(`/projects/${id}/nodes/${node}/ui`, { value }),
   panic: () => call("/panic", {}),
+  group: (gid: string) => call<GroupFull>(`/groups/${gid}`),
+  groupOps: (gid: string, ops: Op[], rev?: number) => call<OpsResult>(`/groups/${gid}/ops`, { ops, rev }),
+  groupRename: (gid: string, name: string) => call(`/groups/${gid}`, { name }, "PUT"),
   mqtt: () => call<MqttState>("/settings/mqtt"),
   mqttSave: (s: MqttSettings) => call<MqttState>("/settings/mqtt", s, "PUT"),
   secrets: () => call<{ names: string[] }>("/secrets"),

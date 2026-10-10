@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 export type Route =
   | { page: "board" }
   | { page: "scripts"; id?: string }
-  | { page: "projects"; id?: string }
+  | { page: "projects"; id?: string; group?: string; inst?: string } // inst — путь ноды-группы: "g" или "g2/g1"
   | { page: "blocks"; id?: string }
   | { page: "secrets" }
   | { page: "help"; section?: string; anchor?: string };
@@ -13,7 +13,8 @@ export type Route =
 function parse(hash: string): Route {
   const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "scripts") return { page: "scripts", id: parts[1] };
-  if (parts[0] === "projects") return { page: "projects", id: parts[1] };
+  if (parts[0] === "projects")
+    return { page: "projects", id: parts[1], ...(parts[2] === "group" ? { group: parts[3], inst: parts[4] } : {}) };
   if (parts[0] === "blocks") return { page: "blocks", id: parts[1] };
   if (parts[0] === "secrets") return { page: "secrets" };
   if (parts[0] === "help") return { page: "help", section: parts[1], anchor: parts[2] };
@@ -22,8 +23,9 @@ function parse(hash: string): Route {
 
 export function href(r: Route): string {
   switch (r.page) {
-    case "scripts":
     case "projects":
+      return `#/projects${r.id ? `/${r.id}` : ""}${r.group ? `/group/${r.group}/${encodeURIComponent(r.inst ?? "")}` : ""}`;
+    case "scripts":
     case "blocks":
       return `#/${r.page}${r.id ? `/${r.id}` : ""}`;
     case "help":

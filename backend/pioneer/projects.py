@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pioneer.engine.graph import Graph, Report, validate
+from pioneer.engine.graph import Graph, Issue, Report, validate
 from pioneer.engine.node import NodeError, NodeRegistry
 from pioneer.engine.ops import OpError, apply_ops
 from pioneer.engine.runtime import Engine, StartError
@@ -71,6 +71,7 @@ class ProjectManager:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.hw, self.registry = hw, registry
         self.engine = engine or Engine(hw, registry)
+        self.groups = None  # GroupManager (если подключены группы нод)
         self.engine.on_log = self._log
         self._lock = threading.RLock()
         self._status: dict[str, Status] = {}
@@ -162,13 +163,35 @@ class ProjectManager:
                 for rid, c in self.hw.res.claims.items() if any(o != me for o in c.owners)}
 
     def _validate(self, pid: str, graph: Graph) -> Report:
-        return validate(graph, self.registry, self.hw.board, foreign_claims=self._foreign_claims(pid))
+        foreign = self._foreign_claims(pid)
+        rep = validate(graph, self.registry, self.hw.board, foreign_claims=foreign)
+        if self.groups is None or not rep.ok or not any(self.groups.of_type(n.type) for n in graph.nodes.values()):
+            return rep
+        # содержимое групп: проверяем развёрнутый граф (пины, двойные выходы, параметры внутри групп)
+        try:
+            flat, _, owner = self.groups.flatten(graph)
+        except ValueError as e:
+            rep.incomplete.append(Issue(str(e)))
+            return rep
+        inner = validate(flat, self.registry, self.hw.board, foreign_claims=foreign)
+        for bucket in ("errors", "incomplete", "warnings"):
+            for i in getattr(inner, bucket):
+                if i.node and "/" in i.node:  # верхний уровень уже проверен выше
+                    path = i.node.split("/", 1)[1]
+                    target = rep.incomplete if bucket == "errors" else getattr(rep, bucket)
+                    target.append(Issue(f"в группе ({path}): {i.message}", node=owner.get(i.node, i.node)))
+        return rep
+
+    def _flat(self, graph: Graph):
+        if self.groups is None:
+            return graph, {}, {}
+        return self.groups.flatten(graph)
 
     def validate_ops(self, pid: str, ops: list[dict]) -> dict:
         """Прогнать пакет без сохранения (для UI и AI-помощника)."""
         _, graph = self._read(pid)
         try:
-            new, _, _ = apply_ops(graph, ops, self.registry, self.hw.board)
+            new, _, _ = apply_ops(graph, ops, self.registry, self.hw.board, None)
         except OpError as e:
             return {"ok": False, "can_start": False, "errors": [e.to_json()], "incomplete": [], "warnings": []}
         return self._validate(pid, new).to_json()
@@ -180,7 +203,7 @@ class ProjectManager:
                 raise RevConflict(f"граф изменён в другой вкладке (ревизия {meta.rev}, у вас {base_rev})", 409,
                                   {"rev": meta.rev})
             try:
-                new, inverse, created = apply_ops(graph, ops, self.registry, self.hw.board)
+                new, inverse, created = apply_ops(graph, ops, self.registry, self.hw.board, self.groups)
             except OpError as e:
                 raise ProjectError(str(e), 422, {"errors": [e.to_json()]}) from None
             rep = self._validate(pid, new)
@@ -201,8 +224,11 @@ class ProjectManager:
             raise ProjectError(f"граф не готов: {rep.text()}", 422, rep.to_json())
         self._logs.setdefault(pid, collections.deque(maxlen=LOG_LINES))
         try:
-            self.engine.start_project(pid, meta.name, graph, meta.rev)
-        except StartError as e:
+            flat, aliases, _ = self._flat(graph)
+            rt = self.engine.start_project(pid, meta.name, flat, meta.rev, aliases)
+            if self.groups is not None:
+                rt.group_revs = self.groups.used_revs(graph)
+        except (StartError, ValueError) as e:
             self._fail(pid, str(e))
             raise ProjectError(str(e)) from None
         self._set_status(pid, Status("running", started=time.time(), rev=meta.rev))
@@ -253,12 +279,17 @@ class ProjectManager:
         rt = self.engine.runtimes.get(pid)
         if rt is not None:
             try:
-                st["dirty"] = rt.rev != self._read(pid)[0].rev or self._blocks_changed(rt)
+                st["dirty"] = rt.rev != self._read(pid)[0].rev or self._blocks_changed(rt) or self._groups_changed(rt)
             except ProjectError:
                 st["dirty"] = False
         else:
             st["dirty"] = False
         return st
+
+    def _groups_changed(self, rt) -> bool:
+        if self.groups is None:
+            return False
+        return any(gid not in self.groups.defs or self.groups.defs[gid].rev != rev for gid, rev in rt.group_revs.items())
 
     @staticmethod
     def _blocks_changed(rt) -> bool:

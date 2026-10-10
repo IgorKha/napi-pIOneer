@@ -111,7 +111,8 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
       {route.page === "projects" ? (
         liveBoard ? (
           <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
-            <ProjectsPage board={liveBoard} selected={route.id} pinLive={live} live={projectLive} logs={projectLogs}
+            <ProjectsPage board={liveBoard} selected={route.id}
+                          group={route.group ? { gid: route.group, inst: route.inst ?? "" } : undefined} pinLive={live} live={projectLive} logs={projectLogs}
                           status={projectStatus} resetLive={resetProjectLive} onError={showError} />
           </Suspense>
         ) : <div className="p-8 text-muted">Загрузка…</div>

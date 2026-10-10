@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import auth, bench, blocks, board, help, hooks, projects, remote, scripts, secrets, settings
+from pioneer.api import auth, bench, blocks, board, groups, help, hooks, projects, remote, scripts, secrets, settings
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
@@ -21,6 +21,7 @@ from pioneer.resources import ResourceManager
 from pioneer.nodes import registry
 from pioneer.projects import ProjectManager
 from pioneer.scripts import ScriptManager
+from pioneer.groups import GroupManager
 from pioneer.mqtt import MqttBridge, SettingsStore
 from pioneer.remote import Remote
 from pioneer.secrets_store import SecretStore
@@ -56,7 +57,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         live.add_source(sm.drain)
         reg = registry().copy()  # встроенные + свои блоки
         app.state.blocks = BlockManager(cfg.data_dir, reg)
+        app.state.groups = GroupManager(cfg.data_dir, reg)
         app.state.projects = pm = ProjectManager(cfg.data_dir, app.state.hw, reg)
+        pm.groups = app.state.groups
         app.state.secrets = pm.engine.secrets = SecretStore(cfg.data_dir)
         app.state.remote = pm.engine.remote = Remote(pm)
         app.state.settings = settings = SettingsStore(cfg.data_dir)
@@ -94,6 +97,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     protected.include_router(blocks.router)
     protected.include_router(secrets.router)
     protected.include_router(settings.router)
+    protected.include_router(groups.router)
     app.include_router(public, prefix=API)
     app.include_router(protected, prefix=API)
 

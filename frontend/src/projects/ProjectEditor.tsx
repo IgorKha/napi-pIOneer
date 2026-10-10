@@ -27,6 +27,7 @@ const STATE: Record<ProjectStatus["state"], [string, string]> = {
 
 export interface EditorProps {
   id: string;
+  group?: { gid: string; inst: string }; // правка содержимого группы (Tab внутрь)
   board: Board;
   types: NodeTypeSchema[];
   pinLive: Record<string, PinState>;
@@ -46,8 +47,23 @@ export function ProjectEditor(props: EditorProps) {
   );
 }
 
-function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLive, onError, onListChange }: EditorProps) {
+/** Live проекта, увиденный изнутри экземпляра группы: ключи «inst/нода.сокет» → «нода.сокет». */
+function liveInside(live: ProjectLive | undefined, inst: string): ProjectLive | undefined {
+  if (!live) return live;
+  const p = inst + "/";
+  const strip = <T,>(rec: Record<string, T>) =>
+    Object.fromEntries(Object.entries(rec).filter(([k]) => k.startsWith(p)).map(([k, v]) => [k.slice(p.length), v]));
+  return { values: strip(live.values), events: strip(live.events), views: strip(live.views), nodes: strip(live.nodes) };
+}
+
+const GROUP_PREFIX = "group.";
+export const groupIdOf = (type: string) => (type.startsWith(GROUP_PREFIX) ? type.slice(GROUP_PREFIX.length).split("@")[0] : null);
+
+function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveLog, liveStatus, resetLive, onError, onListChange }: EditorProps) {
   const [project, setProject] = useState<ProjectFull | null>(null);
+  const [groupName, setGroupName] = useState<string | null>(null);
+  const [groupTargets, setGroupTargets] = useState<[string, string][]>([]); // входы, подключённые снаружи группы
+  const live = useMemo(() => (group ? liveInside(projectLiveData, group.inst) : projectLiveData), [group, projectLiveData]);
   const [nodes, setNodes] = useState<AnyNode[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -65,10 +81,18 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   const status = liveStatus ?? project?.status;
   const running = status?.state === "running";
 
-  const load = useCallback(() => api.project(id).then(setProject, (e: Error) => {
+  // в режиме группы граф/ревизия/проверка — группы, статус и лог — проекта
+  const load = useCallback(() => (group
+    ? Promise.all([api.project(id), api.group(group.gid)]).then(([p, g]) => {
+        setGroupName(g.name);
+        setGroupTargets(g.inputs.flatMap((i) => i.targets));
+        setProject({ ...p, graph: g.graph, rev: g.rev, node_types: g.node_types, validation: g.validation });
+      })
+    : api.project(id).then(setProject)
+  ).catch((e: Error) => {
     onError(e.message);
-    navigate({ page: "projects" });
-  }), [id, onError]);
+    navigate({ page: "projects", id: group ? id : undefined });
+  }), [id, group, onError]);
 
   useEffect(() => {
     undo.current = [];
@@ -87,7 +111,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   const send = useCallback(async (ops: Op[], history: "push" | "undo" | "redo" = "push") => {
     if (!project || !ops.length) return;
     try {
-      const r = await api.projectOps(id, ops, project.rev);
+      const r = group ? await api.groupOps(group.gid, ops, project.rev) : await api.projectOps(id, ops, project.rev);
       const stack = history === "undo" ? redo : undo;
       stack.current.push(r.inverse);
       if (history === "push") redo.current = [];
@@ -105,7 +129,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
         await load(); // откатить оптимистичные перемещения
       }
     }
-  }, [id, project, load, onError]);
+  }, [id, group, project, load, onError]);
 
   const doUndo = useCallback(() => {
     const ops = undo.current.pop();
@@ -116,6 +140,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
     if (ops) send(ops, "redo");
   }, [send]);
 
+  const keys = useRef({ group: () => {}, tab: () => {} }); // обработчики ⌘G / Tab (заполняются ниже)
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -126,6 +151,12 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "y") {
         e.preventDefault();
         doRedo();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "g") {
+        e.preventDefault();
+        keys.current.group();
+      } else if (e.key === "Tab") {
+        e.preventDefault();
+        keys.current.tab();
       }
     };
     window.addEventListener("keydown", on);
@@ -135,8 +166,10 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   const actions: NodeActions = useMemo(() => ({
     inline: (node, input, value) => send([{ op: "set_input_value", node, name: input, value }]),
     collapse: (node, collapsed) => send([{ op: "collapse", node, collapsed }]),
-    ui: (node, value) => { api.projectUi(id, node, value).catch((e: Error) => onError(e.message)); },
-  }), [id, send, onError]);
+    ui: (node, value) => {
+      api.projectUi(id, group ? `${group.inst}/${node}` : node, value).catch((e: Error) => onError(e.message));
+    },
+  }), [id, group, send, onError]);
 
   // ---- граф -> узлы/рёбра React Flow
   // параметры-пины типа ноды (провод от платы к гнезду __pin:<параметр>)
@@ -168,14 +201,15 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
           id: n.id, type: "pnode", position: { x: n.position[0], y: n.position[1] },
           data: {
             gnode: n, schema: schemaOf(n), board, live, running, actions,
-            connected: new Set(g.edges.filter((e) => e.to[0] === n.id).map((e) => e.to[1])),
+            connected: new Set([...g.edges.filter((e) => e.to[0] === n.id).map((e) => e.to[1]),
+                                ...groupTargets.filter((t) => t[0] === n.id).map((t) => t[1])]),
             issues: issues.filter((i) => i.node === n.id),
           },
         }));
       }
       return out;
     });
-  }, [project, schemaOf, board, pinLive, live, running, actions, send, pinParams]);
+  }, [project, schemaOf, board, pinLive, live, running, actions, send, pinParams, groupTargets]);
 
   const edges: Edge[] = useMemo(() => {
     if (!project) return [];
@@ -293,6 +327,25 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
     });
   };
 
+  // ---- группы нод (spec 3.6 a)
+  const selectedIds = nodes.filter((n) => n.selected && n.type === "pnode").map((n) => n.id);
+  const selGroupNode = selectedIds.length === 1
+    ? project?.graph.nodes.find((n) => n.id === selectedIds[0] && groupIdOf(n.type)) : undefined;
+  const doGroup = () => {
+    if (group || !selectedIds.length) return;
+    const name = prompt("Название группы", "Группа");
+    if (name === null) return;
+    send([{ op: "group", nodes: selectedIds, name }]).then((r) => r?.created[0] && setSelected(r.created[0]));
+  };
+  const doUngroup = () => selGroupNode && send([{ op: "ungroup", node: selGroupNode.id }]);
+  const openGroup = (nodeId?: string) => {
+    const n = project?.graph.nodes.find((x) => x.id === (nodeId ?? selGroupNode?.id));
+    const gid = n && groupIdOf(n.type);
+    if (n && gid) navigate({ page: "projects", id, group: gid, inst: group ? `${group.inst}/${n.id}` : n.id });
+  };
+  const exitGroup = () => group && navigate({ page: "projects", id });
+  keys.current = { group: doGroup, tab: () => (selGroupNode ? openGroup() : exitGroup()) };
+
   const log = useMemo(() => [...(history?.lines ?? []), ...(history ? (liveLog ?? []).slice(history.liveFrom) : [])],
                       [history, liveLog]);
 
@@ -303,10 +356,23 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b border-line px-4 py-2">
-        <input key={project.id} defaultValue={project.name} aria-label="Название проекта"
-               onBlur={(e) => e.target.value.trim() && e.target.value !== project.name && meta({ name: e.target.value })}
-               onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-               className="w-56 rounded border border-transparent bg-transparent px-1.5 py-1 font-semibold hover:border-line focus:border-accent focus:outline-none" />
+        {group ? (
+          <span className="flex items-center gap-1.5 text-sm">
+            <button onClick={exitGroup} title="Выйти из группы (Tab)" className="text-accent hover:underline">{project.name}</button>
+            <span className="text-muted">›</span>
+            <input key={group.gid} defaultValue={groupName ?? ""} aria-label="Название группы"
+                   onBlur={(e) => e.target.value.trim() && e.target.value !== groupName &&
+                     api.groupRename(group.gid, e.target.value).then(load, (er: Error) => onError(er.message))}
+                   onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                   className="w-44 rounded border border-transparent bg-transparent px-1.5 py-1 font-semibold hover:border-line focus:border-accent focus:outline-none" />
+            <span className="text-[11px] text-muted" title="Изменения действуют во всех проектах с этой группой">группа · общая для проектов</span>
+          </span>
+        ) : (
+          <input key={project.id} defaultValue={project.name} aria-label="Название проекта"
+                 onBlur={(e) => e.target.value.trim() && e.target.value !== project.name && meta({ name: e.target.value })}
+                 onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                 className="w-56 rounded border border-transparent bg-transparent px-1.5 py-1 font-semibold hover:border-line focus:border-accent focus:outline-none" />
+        )}
         <span className="flex items-center gap-1.5 text-xs text-muted">
           <span className={`size-2 rounded-full ${dot}`} />{label}
           {running && status?.dirty && <span className="text-warn">· граф изменён</span>}
@@ -316,6 +382,18 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
                   className="rounded px-2 py-1 text-muted hover:bg-panel-2 hover:text-fg disabled:opacity-30">↶</button>
           <button onClick={doRedo} disabled={!redo.current.length} title="Повторить (⌘⇧Z)"
                   className="rounded px-2 py-1 text-muted hover:bg-panel-2 hover:text-fg disabled:opacity-30">↷</button>
+          {!group && selectedIds.length > 0 && !selGroupNode && (
+            <button onClick={doGroup} title="Сгруппировать выделенные ноды (⌘G). Выделение — Shift + рамка"
+                    className="ml-2 rounded bg-panel-2 px-2 py-1 hover:bg-[#3a3a3a]">Сгруппировать ({selectedIds.length})</button>
+          )}
+          {selGroupNode && (
+            <>
+              <button onClick={() => openGroup()} title="Открыть группу (Tab)"
+                      className="ml-2 rounded bg-panel-2 px-2 py-1 hover:bg-[#3a3a3a]">Открыть группу</button>
+              <button onClick={doUngroup} title="Вставить содержимое группы в граф"
+                      className="rounded bg-panel-2 px-2 py-1 hover:bg-[#3a3a3a]">Разгруппировать</button>
+            </>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-1.5">
           {running ? (
@@ -333,9 +411,13 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
                     title={project.validation.can_start ? undefined : "Граф не готов — см. «Проверка графа» справа"}
                     className="rounded bg-ok/90 px-3 py-1 text-xs text-bg hover:bg-ok disabled:opacity-40">▶ Запустить</button>
           )}
-          <button onClick={() => act(async () => { const m = await api.projectDuplicate(id); navigate({ page: "projects", id: m.id }); })}
-                  title="Дублировать" className="px-1.5 text-muted hover:text-fg">⧉</button>
-          <button onClick={remove} aria-label="Удалить проект" title="Удалить" className="px-1.5 text-muted hover:text-err">🗑</button>
+          {!group && (
+            <>
+              <button onClick={() => act(async () => { const m = await api.projectDuplicate(id); navigate({ page: "projects", id: m.id }); })}
+                      title="Дублировать" className="px-1.5 text-muted hover:text-fg">⧉</button>
+              <button onClick={remove} aria-label="Удалить проект" title="Удалить" className="px-1.5 text-muted hover:text-err">🗑</button>
+            </>
+          )}
         </div>
       </div>
 
@@ -356,6 +438,8 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
           <ReactFlow<AnyNode, Edge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode="dark"
                      onNodesChange={onNodesChange} onConnect={onConnect} onDelete={onDelete}
                      onNodeDragStop={onNodeDragStop} isValidConnection={isValidConnection}
+                     onNodeDoubleClick={(_, n) => n.type === "pnode" && groupIdOf((n.data as { gnode: { type: string } }).gnode.type) && openGroup(n.id)}
+                     selectionKeyCode="Shift" multiSelectionKeyCode={["Meta", "Control"]}
                      onPaneClick={() => setSelected(null)}
                      deleteKeyCode={["Delete", "Backspace"]} onInit={(f) => setTimeout(() => f.fitView({ padding: 0.15, maxZoom: 1 }), 50)}
                      minZoom={0.2} maxZoom={2} proOptions={{ hideAttribution: true }}

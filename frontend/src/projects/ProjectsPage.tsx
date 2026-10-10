@@ -8,6 +8,7 @@ const DOT: Record<ProjectStatus["state"], string> = { running: "bg-ok", error: "
 interface Props {
   board: Board;
   selected?: string;
+  group?: { gid: string; inst: string };
   pinLive: Record<string, PinState>;
   live: Record<string, ProjectLive>;
   logs: Record<string, ProjectLogLine[]>;
@@ -17,7 +18,7 @@ interface Props {
 }
 
 /** Проекты (spec 3.2, 4): список слева, редактор графа справа. */
-export function ProjectsPage({ board, selected, pinLive, live, logs, status, resetLive, onError }: Props) {
+export function ProjectsPage({ board, selected, group, pinLive, live, logs, status, resetLive, onError }: Props) {
   const [list, setList] = useState<ProjectMeta[]>([]);
   const [types, setTypes] = useState<NodeTypeSchema[] | null>(null);
   const reload = useCallback(() => api.projects().then(setList, (e: Error) => onError(e.message)), [onError]);
@@ -67,7 +68,7 @@ export function ProjectsPage({ board, selected, pinLive, live, logs, status, res
       </aside>
 
       {selected && types ? (
-        <ProjectEditor key={selected} id={selected} board={board} types={types} pinLive={pinLive}
+        <ProjectEditor key={`${selected}/${group?.inst ?? ""}`} id={selected} group={group} board={board} types={types} pinLive={pinLive}
                        live={live[selected]} liveLog={logs[selected]} liveStatus={status[selected]}
                        resetLive={resetLive} onError={onError} onListChange={reload} />
       ) : (

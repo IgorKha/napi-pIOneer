@@ -113,7 +113,7 @@ def test_ops_errors(board):
                       {"op": "move", "node": "zz", "position": [1, 1]}], REG, board)
     with pytest.raises(OpError, match="не поддерживает режим gpio_out"):
         apply_ops(g, [{"op": "set_param", "node": "out", "name": "pin", "value": "J9-26"}], REG, board)
-    with pytest.raises(OpError, match="фазе 2"):
+    with pytest.raises(OpError, match="группы здесь недоступны"):
         apply_ops(g, [{"op": "group", "nodes": ["a"]}], REG, board)
     # нода без пина сохраняется, но не запускается
     rep = validate(g, REG, board)

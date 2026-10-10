@@ -54,8 +54,9 @@ def new_node_id(graph: Graph) -> str:
     return nid
 
 
-def apply_ops(graph: Graph, ops: list[dict], registry: NodeRegistry, board: Board | None = None
-              ) -> tuple[Graph, list[dict], list[str]]:
+def apply_ops(graph: Graph, ops: list[dict], registry: NodeRegistry, board: Board | None = None,
+              groups=None) -> tuple[Graph, list[dict], list[str]]:
+    """groups — GroupManager (операции group/ungroup); без него они недоступны."""
     if not isinstance(ops, list) or not ops:
         raise OpError(0, "пустой пакет операций")
     if len(ops) > MAX_OPS:
@@ -68,7 +69,9 @@ def apply_ops(graph: Graph, ops: list[dict], registry: NodeRegistry, board: Boar
             if not isinstance(op, dict) or op.get("op") not in OPS:
                 raise ValueError(f"неизвестная операция {op.get('op') if isinstance(op, dict) else op!r}; "
                                  f"есть: {', '.join(OPS)}")
-            inv = _APPLY[op["op"]](g, op, registry, board, created)
+            fn = _APPLY[op["op"]]
+            inv = fn(g, op, registry, board, created, groups) if fn in (_group, _ungroup) else \
+                fn(g, op, registry, board, created)
         except OpError:
             raise
         except (ValueError, KeyError) as e:
@@ -224,10 +227,77 @@ def _collapse(g: Graph, op: dict, reg, board, created) -> list[dict]:
     return [{"op": "collapse", "node": n.id, "collapsed": old}]
 
 
-def _group(g, op, reg, board, created) -> list[dict]:
-    raise ValueError("Node Groups появятся в фазе 2")
+def _group(g: Graph, op: dict, reg, board, created, groups) -> list[dict]:
+    """{"op": "group", "nodes": [...], "name": "…"} — выделение → нода-группа (spec 3.6 a)."""
+    if groups is None:
+        raise ValueError("группы здесь недоступны")
+    ids = op.get("nodes")
+    if not isinstance(ids, list) or not ids or not all(isinstance(i, str) for i in ids):
+        raise ValueError("nodes: список id нод")
+    ids = list(dict.fromkeys(ids))
+    for nid in ids:
+        _node(g, nid)
+    sel = set(ids)
+    touched = [e for e in g.edges if e.src[0] in sel or e.dst[0] in sel]
+    originals = [g.nodes[i] for i in ids]
+    d, plan = groups.create_from(g, ids, op.get("name") or "Группа")
+    gid = op.get("id") or new_node_id(g)
+    cx = sum(n.position[0] for n in originals) / len(originals)
+    cy = sum(n.position[1] for n in originals) / len(originals)
+    g.edges = [e for e in g.edges if e not in touched]
+    for i in ids:
+        del g.nodes[i]
+    g.nodes[gid] = GNode(id=gid, type=d.key, position=[round(cx), round(cy)])
+    for src, name in plan["in"]:
+        g.edges.append(GEdge(src, (gid, name)))
+    for name, dst in plan["out"]:
+        g.edges.append(GEdge((gid, name), dst))
+    created.append(gid)
+    return ([{"op": "remove_node", "id": gid}] + [{"op": "add_node", **n.to_json()} for n in originals]
+            + [{"op": "connect", **e.to_json()} for e in touched])
+
+
+def _ungroup(g: Graph, op: dict, reg, board, created, groups) -> list[dict]:
+    """{"op": "ungroup", "node": id} — содержимое группы вставляется в граф."""
+    if groups is None:
+        raise ValueError("группы здесь недоступны")
+    n = _node(g, op.get("node"))
+    d = groups.of_type(n.type)
+    if d is None:
+        raise ValueError(f"{n.id} — не группа")
+    touched = [e for e in g.edges if n.id in (e.src[0], e.dst[0])]
+    inner = d.graph
+    xs = [m.position[0] for m in inner.nodes.values()] or [0]
+    ys = [m.position[1] for m in inner.nodes.values()] or [0]
+    dx, dy = n.position[0] - sum(xs) / len(xs), n.position[1] - sum(ys) / len(ys)
+    ids: dict[str, str] = {}
+    for iid, m in inner.nodes.items():
+        new = f"{n.id}_{iid}"
+        while new in g.nodes:
+            new += "_"
+        ids[iid] = new
+        g.nodes[new] = GNode(id=new, type=m.type, position=[round(m.position[0] + dx), round(m.position[1] + dy)],
+                             params=dict(m.params), inputs=dict(m.inputs), collapsed=m.collapsed, label=m.label)
+        created.append(new)
+    g.edges = [e for e in g.edges if e not in touched]
+    g.edges += [GEdge((ids[e.src[0]], e.src[1]), (ids[e.dst[0]], e.dst[1])) for e in inner.edges]
+    ins = {i["name"]: i for i in d.inputs}
+    outs = {o["name"]: o for o in d.outputs}
+    for name, value in n.inputs.items():
+        for t in ins.get(name, {}).get("targets", []):
+            g.nodes[ids[t[0]]].inputs[t[1]] = value
+    for e in touched:
+        if e.dst[0] == n.id and e.dst[1] in ins:
+            for t in ins[e.dst[1]]["targets"]:
+                g.edges.append(GEdge(e.src, (ids[t[0]], t[1])))
+        elif e.src[0] == n.id and e.src[1] in outs:
+            s = outs[e.src[1]]["source"]
+            g.edges.append(GEdge((ids[s[0]], s[1]), e.dst))
+    del g.nodes[n.id]
+    return ([{"op": "remove_node", "id": i} for i in ids.values()] + [{"op": "add_node", **n.to_json()}]
+            + [{"op": "connect", **e.to_json()} for e in touched])
 
 
 _APPLY = {"add_node": _add_node, "remove_node": _remove_node, "set_param": _set_param,
           "set_input_value": _set_input_value, "connect": _connect, "disconnect": _disconnect,
-          "move": _move, "rename": _rename, "collapse": _collapse, "group": _group, "ungroup": _group}
+          "move": _move, "rename": _rename, "collapse": _collapse, "group": _group, "ungroup": _ungroup}

@@ -126,8 +126,12 @@ class ProjectHW:
 
 # ---------------------------------------------------------------- проект
 class ProjectRuntime:
-    def __init__(self, engine: Engine, project_id: str, name: str, graph: Graph, rev: int = 0):
+    def __init__(self, engine: Engine, project_id: str, name: str, graph: Graph, rev: int = 0,
+                 aliases: dict[str, list[str]] | None = None):
         self.engine, self.project_id, self.name, self.graph, self.rev = engine, project_id, name, graph, rev
+        # live-ключ внутреннего выхода группы → ключи выходов нод-групп (граф развёрнут, groups.py)
+        self.aliases = aliases or {}
+        self.group_revs: dict[str, int] = {}
         self.owner, self.owner_name = f"project:{project_id}", f"проект «{name}»"
         self.hw = ProjectHW(engine.hw, self.owner, self.owner_name)
         self.types: dict[str, NodeType] = {nid: engine.registry.for_node(n) for nid, n in graph.nodes.items()}
@@ -292,7 +296,11 @@ class ProjectRuntime:
                 return
             s = self.samples[key] = Sample(value, w.origin, time.time())
             with self._live_lock:
-                self._live_values[f"{node.id}.{spec.name}"] = {"v": jsonable(value), "o": str(s.origin), "t": s.ts}
+                k = f"{node.id}.{spec.name}"
+                entry = {"v": jsonable(value), "o": str(s.origin), "t": s.ts}
+                self._live_values[k] = entry
+                for a in self.aliases.get(k, ()):
+                    self._live_values[a] = entry
             for dst_node, dst_sock in self.fanout.get(key, ()):
                 w.dirty.setdefault(dst_node, set()).add(dst_sock)
                 self._queue(w, dst_node)
@@ -308,6 +316,9 @@ class ProjectRuntime:
             with self._live_lock:
                 n = self._event_counts[key] = self._event_counts.get(key, 0) + 1
                 self._live_events[key] = {"n": n, "t": ev.ts, "o": str(w.origin), "p": jsonable(payload, 200)}
+                for a in self.aliases.get(key, ()):
+                    self._event_counts[a] = n
+                    self._live_events[a] = self._live_events[key]
             for dst_node, dst_sock in self.fanout.get((node.id, spec.name), ()):
                 w.events.setdefault(dst_node, []).append((dst_sock, ev))
                 self._queue(w, dst_node)
@@ -481,6 +492,10 @@ class ProjectRuntime:
         with self._live_lock:
             values = {f"{n}.{s}": {"v": jsonable(x.value), "o": str(x.origin), "t": x.ts}
                       for (n, s), x in self.samples.items()}
+            for k, aka in self.aliases.items():
+                if k in values:
+                    for a in aka:
+                        values[a] = values[k]
             events = {k: {"n": c} for k, c in self._event_counts.items()}
         return {"values": values, "events": events, "views": dict(self.views),
                 "nodes": {nid: self.node_state(nid) for nid in self.nodes}}
@@ -631,12 +646,13 @@ class Engine:
         self.wave_hooks.append(hook)
 
     # ---- проекты
-    def start_project(self, project_id: str, name: str, graph: Graph, rev: int = 0) -> ProjectRuntime:
+    def start_project(self, project_id: str, name: str, graph: Graph, rev: int = 0,
+                      aliases: dict[str, list[str]] | None = None) -> ProjectRuntime:
         def run():
             if project_id in self.runtimes:
                 raise StartError("проект уже запущен")
             try:
-                rt = ProjectRuntime(self, project_id, name, graph, rev)
+                rt = ProjectRuntime(self, project_id, name, graph, rev, aliases)
             except KeyError as e:
                 raise StartError(str(e.args[0])) from None
             self._check_manifest(rt)
