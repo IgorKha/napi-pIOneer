@@ -321,6 +321,15 @@ class Node:
         """Вызывать fn в моменты времени (time.time()), которые возвращает when() (Schedule)."""
         return self._rt.at(self, when, fn)
 
+    def run_async(self, work: Callable[[], Any], done: Callable[[Any, BaseException | None], None]) -> None:
+        """Долгая работа (HTTP) вне потока движка; done(результат, ошибка) — новой волной."""
+        self._rt.run_async(self, work, done)
+
+    def secret_text(self, text: str) -> str:
+        """Подставить {{secret:имя}} из хранилища секретов (значения не попадают в граф)."""
+        store = self._rt.engine.secrets
+        return store.resolve(text) if store is not None else text
+
     def from_thread(self, origin: Origin, fn: Callable[[], None]) -> None:
         """Потокобезопасно: выполнить fn в новой волне (колбэки HAL, ридеры портов)."""
         self._rt.engine.inject_call(self._rt.project_id, origin, fn, node=self)

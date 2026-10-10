@@ -45,6 +45,13 @@ function NodePanel({ project, node, schema, board, live, running, apply }: Props
         <div role="alert" className="rounded border border-err/50 bg-[#3a2222] px-2 py-1.5 text-[#f0b0b0]">{state.error}</div>
       )}
 
+      {schema.id === "builtin.webhook_in" && typeof node.params.path === "string" && node.params.path && (
+        <div className="rounded border border-line bg-bg px-2 py-1.5">
+          <div className="text-muted">Адрес (POST, заголовок X-Pioneer-Token):</div>
+          <code className="break-all font-mono text-fg">{`${location.origin}/pioneer/api/hooks/${node.params.path}`}</code>
+        </div>
+      )}
+
       {schema.params.length > 0 && (
         <section className="flex flex-col gap-2.5">
           <h3 className="font-semibold uppercase tracking-wide text-muted">Параметры</h3>

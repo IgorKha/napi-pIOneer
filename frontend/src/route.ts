@@ -7,6 +7,7 @@ export type Route =
   | { page: "scripts"; id?: string }
   | { page: "projects"; id?: string }
   | { page: "blocks"; id?: string }
+  | { page: "secrets" }
   | { page: "help"; section?: string; anchor?: string };
 
 function parse(hash: string): Route {
@@ -14,6 +15,7 @@ function parse(hash: string): Route {
   if (parts[0] === "scripts") return { page: "scripts", id: parts[1] };
   if (parts[0] === "projects") return { page: "projects", id: parts[1] };
   if (parts[0] === "blocks") return { page: "blocks", id: parts[1] };
+  if (parts[0] === "secrets") return { page: "secrets" };
   if (parts[0] === "help") return { page: "help", section: parts[1], anchor: parts[2] };
   return { page: "board" };
 }
@@ -26,6 +28,8 @@ export function href(r: Route): string {
       return `#/${r.page}${r.id ? `/${r.id}` : ""}`;
     case "help":
       return `#/help${r.section ? `/${r.section}` : ""}${r.anchor ? `/${encodeURIComponent(r.anchor)}` : ""}`;
+    case "secrets":
+      return "#/secrets";
     default:
       return "#/board";
   }

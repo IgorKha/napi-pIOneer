@@ -129,10 +129,25 @@ class RequestContext:
     meta: dict[str, Any] = field(default_factory=dict)
     on_complete: list[Callable[[RequestContext], None]] = field(default_factory=list)
     on_timeout: list[Callable[[RequestContext], None]] = field(default_factory=list)
+    on_reply: list[Callable[[RequestContext], None]] = field(default_factory=list)
+    reply_body: Any = None
+    reply_status: int = 200
     replied: bool = False
     done: bool = False
     timed_out: bool = False
     pending: int = 0
+
+
+    def __str__(self) -> str:
+        return f"запрос {self.id} ({self.transport})"
+
+    def reply(self, body: Any, status: int = 200) -> None:
+        """Ответ на запрос (нода «Ответ»): первый ответ выигрывает."""
+        if self.replied:
+            return
+        self.replied, self.reply_body, self.reply_status = True, body, status
+        for cb in self.on_reply:
+            cb(self)
 
 
 @dataclass(frozen=True)
@@ -160,6 +175,8 @@ def jsonable(value: Any, limit: int = 2000) -> Any:
         return value[:limit] if isinstance(value, str) else value
     if isinstance(value, (bytes, bytearray)):
         return {"image": len(value)}
+    if not isinstance(value, (dict, list, tuple)):
+        return str(value)[:limit]
     try:
         import json
         text = json.dumps(value, ensure_ascii=False, default=str)

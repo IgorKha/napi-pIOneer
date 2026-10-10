@@ -2,4 +2,4 @@
 
 Импорт модулей регистрирует типы в pioneer.engine.node.BUILTIN.
 """
-from pioneer.nodes.builtin import hw, logic, timing, ui  # noqa: F401
+from pioneer.nodes.builtin import hw, logic, net, timing, ui  # noqa: F401

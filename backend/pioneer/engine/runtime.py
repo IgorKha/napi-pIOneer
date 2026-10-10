@@ -355,6 +355,27 @@ class ProjectRuntime:
         self.timers.add(t)
         return t
 
+    def run_async(self, node: Node, work: Callable[[], Any], done: Callable[[Any, BaseException | None], None]) -> None:
+        """work() — в пуле потоков (сеть, долгий ввод-вывод); done(result, error) — новой волной
+        с тем же origin и контекстом запроса (запрос не завершится, пока работа идёт)."""
+        w = self.wave
+        ctx = w.ctx if w else None
+        origin = w.origin.again() if w else Origin("system", node.id)
+        if ctx is not None:
+            ctx.pending += 1
+        fut = self.engine.loop.run_in_executor(None, work)
+
+        def finished(f):
+            if ctx is not None:
+                ctx.pending -= 1
+            err = f.exception()
+            result = None if err else f.result()
+            if self.running and self.nodes.get(node.id) is node:
+                self.run_wave(origin, ctx, lambda: done(result, err), node)
+            elif ctx is not None:
+                self._ctx_check(ctx)
+        fut.add_done_callback(finished)
+
     def every(self, node: Node, seconds: float, fn: Callable[[], None], origin: Origin | None) -> Timer:
         if seconds <= 0:
             raise NodeError("период должен быть > 0")
@@ -497,6 +518,7 @@ class Engine:
         self.runtimes: dict[str, ProjectRuntime] = {}
         self.wave_hooks: list[Callable[[ProjectRuntime, Wave], None]] = []
         self.on_log: Callable[[str, dict], None] = lambda pid, line: None
+        self.secrets = None  # SecretStore: {{secret:имя}} в параметрах нод (spec 6)
         self._wave_ids = itertools.count(1)
         self._seq = itertools.count()
         self._thread = threading.Thread(target=self._run, name="pioneer-engine", daemon=True)

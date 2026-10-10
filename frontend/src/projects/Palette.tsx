@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import type { NodeTypeSchema } from "../api";
 
-const ORDER = ["Железо", "Логика", "Математика", "События и время", "Пульт", "Отладка"];
+const ORDER = ["Железо", "Логика", "Математика", "События и время", "Сеть", "Пульт", "Отладка", "Мои блоки"];
 export const DND_TYPE = "application/x-pioneer-node";
 
 /** Палитра нод: поиск, категории; перетащить на канвас или кликнуть — нода в центре вида. */
