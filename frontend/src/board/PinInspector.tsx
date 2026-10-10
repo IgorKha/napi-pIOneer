@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type BenchModel, type Board, type InterfacePlan, type Pin, type PinState, type RuntimeMode } from "../api";
+import { Tip } from "../Tip";
 import { BenchSection } from "./BenchSection";
 import { formatValue, ifaceShort } from "./look";
 
@@ -98,8 +99,8 @@ function Control({ pin, st, run }: { pin: Pin; st: PinState; run: (p: Promise<un
                : <Badge color="free">Свободен</Badge>}
         {/* владелец — сколько влезет (полностью в подсказке), значение — в слоте фиксированной ширины,
             чтобы строка не прыгала при LOW ↔ HIGH и смене вольт */}
-        <span className="min-w-0 flex-1 truncate text-muted" title={claim ? Object.values(claim.owners).join(", ") : undefined}>
-          {claim && Object.values(claim.owners).join(", ")}
+        <span className="min-w-0 flex-1">
+          {claim && <Owners owners={claim.owners} />}
         </span>
         <span className="w-[8ch] shrink-0 text-right font-mono text-lg font-semibold tabular-nums text-pin-high">
           {value}
@@ -246,5 +247,19 @@ function Btn({ active, onClick, children }: { active?: boolean; onClick: () => v
               : "bg-panel-2 text-fg hover:bg-[#3a3a3a]"}`}>
       {children}
     </button>
+  );
+}
+
+/** Владельцы захвата. id вида "script:<id>" — задел под переход в скрипт по клику
+ *  (страница скриптов: следующий шаг), пока — просто текст с подсказкой. */
+function Owners({ owners }: { owners: Record<string, string> }) {
+  const text = Object.values(owners).join(", ");
+  return (
+    <Tip text={text} className="block">
+      <span tabIndex={0} data-owners={Object.keys(owners).join(" ")}
+            className="block truncate text-muted outline-none focus-visible:text-fg">
+        {text}
+      </span>
+    </Tip>
   );
 }
