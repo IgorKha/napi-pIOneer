@@ -4,7 +4,7 @@ import type { BenchModel, PinState } from "./api";
 export type LiveStatus = "connecting" | "open" | "closed";
 
 /** Подписка на /pioneer/ws: состояние пинов и моделей стенда, с переподключением. */
-export function useLive(initialBench: BenchModel[] | null) {
+export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () => void) {
   const [pins, setPins] = useState<Record<string, PinState>>({});
   const [bench, setBench] = useState<Record<string, BenchModel>>({});
   const [status, setStatus] = useState<LiveStatus>("connecting");
@@ -31,8 +31,9 @@ export function useLive(initialBench: BenchModel[] | null) {
           setBench((prev) => (msg.full ? upd : { ...prev, ...upd }));
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (e) => {
         setStatus("closed");
+        if (e.code === 4401) return onUnauthorized(); // сессия истекла — не переподключаемся
         if (!closed) retry = window.setTimeout(connect, 1500);
       };
     };
@@ -42,7 +43,7 @@ export function useLive(initialBench: BenchModel[] | null) {
       window.clearTimeout(retry);
       ws?.close();
     };
-  }, []);
+  }, [onUnauthorized]);
 
   return { pins, bench, status };
 }

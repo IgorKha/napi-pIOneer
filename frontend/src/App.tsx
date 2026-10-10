@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type BenchModel, type Board } from "./api";
+import { api, setUnauthorizedHandler, type BenchModel, type Board } from "./api";
 import { BoardPage } from "./board/BoardPage";
+import { Login } from "./Login";
 import { useLive, type LiveStatus } from "./useLive";
 
 const STATUS: Record<LiveStatus, [string, string]> = {
@@ -9,12 +10,29 @@ const STATUS: Record<LiveStatus, [string, string]> = {
   closed: ["bg-err", "нет связи"],
 };
 
+type AuthState = "checking" | "in" | "out" | "no-password";
+
 export function App() {
+  const [auth, setAuth] = useState<AuthState>("checking");
+  const loggedOut = useCallback(() => setAuth("out"), []);
+
+  useEffect(() => {
+    setUnauthorizedHandler(loggedOut);
+    api.me().then((m) => setAuth(m.authenticated ? "in" : m.password_set ? "out" : "no-password"),
+                  () => setAuth("out"));
+  }, [loggedOut]);
+
+  if (auth === "checking") return null;
+  if (auth !== "in") return <Login passwordSet={auth === "out"} onDone={() => setAuth("in")} />;
+  return <Main onLogout={() => api.logout().finally(loggedOut)} onUnauthorized={loggedOut} />;
+}
+
+function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthorized: () => void }) {
   const [board, setBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [initialBench, setInitialBench] = useState<BenchModel[] | null>(null);
-  const { pins: live, bench, status } = useLive(initialBench);
+  const { pins: live, bench, status } = useLive(initialBench, onUnauthorized);
 
   useEffect(() => {
     api.board().then((b) => {
@@ -48,6 +66,7 @@ export function App() {
             <span className={`size-2 rounded-full ${dot}`} />
             {label}
           </span>
+          <button onClick={onLogout} className="hover:text-fg">Выйти</button>
         </div>
       </nav>
 

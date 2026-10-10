@@ -83,24 +83,40 @@ export interface InterfacePlan {
 
 const API = "/pioneer/api";
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+/** Вызывается при 401 — приложение показывает экран входа. */
+let onUnauthorized: () => void = () => {};
+export function setUnauthorizedHandler(cb: () => void) {
+  onUnauthorized = cb;
+}
 
 async function call<T>(path: string, body?: unknown, method?: string): Promise<T> {
-  const init: RequestInit = { method: method ?? (body === undefined ? "GET" : "POST") };
+  // X-Pioneer — CSRF-защита: сервер отвергает изменяющие запросы без него
+  const headers: Record<string, string> = { "X-Pioneer": "1" };
+  const init: RequestInit = { method: method ?? (body === undefined ? "GET" : "POST"), headers };
   if (body !== undefined) {
-    init.headers = { "Content-Type": "application/json" };
+    headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(body);
   }
   const res = await fetch(API + path, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = typeof data.detail === "string" ? data.detail : `${res.status} ${res.statusText}`;
-    throw new ApiError(detail);
+    if (res.status === 401 && !path.startsWith("/auth/")) onUnauthorized();
+    throw new ApiError(detail, res.status);
   }
   return data as T;
 }
 
 export const api = {
+  me: () => call<{ authenticated: boolean; password_set: boolean }>("/auth/me"),
+  login: (password: string) => call("/auth/login", { password }),
+  logout: () => call("/auth/logout", {}),
   board: () => call<Board>("/board"),
   manual: (pin: string, mode: RuntimeMode | "release", value = false) =>
     call(`/board/pins/${pin}/manual`, { mode, value }),

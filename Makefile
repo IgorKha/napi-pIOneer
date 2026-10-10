@@ -8,7 +8,10 @@ PY := uv run --python 3.12  # вызывается из backend/
 dev:  ## core (mock-HAL на Mac) :8100 + Vite :5173 -> http://localhost:5173/pioneer/
 	$(MAKE) -j2 core ui
 
-core:
+DEV_PASSWORD ?= pioneer
+
+core:  ## при первом запуске задаёт пароль входа $(DEV_PASSWORD) в .devdata
+	cd backend && echo "$(DEV_PASSWORD)" | $(PY) python -m pioneer set-password --if-missing --stdin
 	cd backend && $(PY) python -m pioneer
 
 ui:

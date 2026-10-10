@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, WebSocket
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import bench, board
+from pioneer.api import auth, bench, board
 from pioneer.api.live import LiveHub
+from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
 from pioneer.config import REPO_ROOT, Config, load_config
 from pioneer.hal import BenchHAL, create_hal
@@ -35,6 +36,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         b = load_board(cfg.board_file, _read_overlays(cfg))
         hal = create_hal(cfg.hal, b, bench_store=cfg.data_dir / "bench.json")
         app.state.cfg, app.state.board, app.state.hal = cfg, b, hal
+        app.state.auth = Auth(cfg.data_dir)
         app.state.hw = HW(b, hal, ResourceManager(b))
         app.state.live = live = LiveHub(b, app.state.hw)
         if isinstance(hal, BenchHAL):
@@ -47,14 +49,20 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     app = FastAPI(title="napi-pioneer", version=__version__, lifespan=lifespan,
                   docs_url=f"{API}/docs", openapi_url=f"{API}/openapi.json")
-    api = APIRouter()
-    api.add_api_route("/health", health)
-    api.include_router(board.router)
-    api.include_router(bench.router)
-    app.include_router(api, prefix=API)
+    public = APIRouter()
+    public.add_api_route("/health", health)
+    public.include_router(auth.router)
+    protected = APIRouter(dependencies=[Depends(auth.require_session)])
+    protected.include_router(board.router)
+    protected.include_router(bench.router)
+    app.include_router(public, prefix=API)
+    app.include_router(protected, prefix=API)
 
     @app.websocket("/pioneer/ws")
     async def ws(websocket: WebSocket) -> None:
+        if not auth.ws_allowed(websocket):
+            await websocket.close(code=4401)
+            return
         await websocket.app.state.live.connect(websocket)
 
     if (FRONTEND_DIST / "index.html").exists():
