@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Board, type LogLine, type ScriptFull, type ScriptMeta, type ScriptStatus } from "../api";
-import { navigate } from "../route";
+import { errorArticle, useHelp } from "../help/useHelp";
+import { href, navigate } from "../route";
 import { CodeEditor } from "./CodeEditor";
 
 const STATE: Record<ScriptStatus["state"], [string, string]> = {
@@ -206,6 +207,8 @@ function LogPanel({ lines }: { lines: LogLine[] }) {
   const stick = useRef(true); // прилипать к низу, пока пользователь не прокрутил вверх
   const [clearedAt, setClearedAt] = useState(0);
   const shown = lines.filter((l) => l.t >= clearedAt);
+  const help = useHelp();
+  let anchor: string | null = null;
 
   useEffect(() => {
     if (stick.current && box.current) box.current.scrollTop = box.current.scrollHeight;
@@ -226,6 +229,10 @@ function LogPanel({ lines }: { lines: LogLine[] }) {
           <div key={i} className={`flex gap-3 whitespace-pre-wrap ${l.stream === "err" ? "text-[#f0b0b0]" : l.stream === "sys" ? "text-muted italic" : ""}`}>
             <span className="shrink-0 text-muted/70 tabular-nums">{new Date(l.t * 1000).toLocaleTimeString("ru-RU")}</span>
             <span className="min-w-0">{l.text}</span>
+            {l.stream !== "out" && (anchor = errorArticle(help, l.text)) && (
+              <a href={href({ page: "help", section: "errors", anchor })} title="Что это значит — справка"
+                 className="shrink-0 rounded bg-panel-2 px-1.5 not-italic text-muted hover:text-fg">?</a>
+            )}
           </div>
         ))}
         {shown.length === 0 && <span className="text-muted">Пусто. print() и log() из скрипта появятся здесь.</span>}

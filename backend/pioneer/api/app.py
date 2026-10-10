@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import auth, bench, board, projects, scripts
+from pioneer.api import auth, bench, board, help, projects, scripts
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
@@ -75,6 +75,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     protected.include_router(bench.router)
     protected.include_router(scripts.router)
     protected.include_router(projects.router)
+    protected.include_router(help.router)
     app.include_router(public, prefix=API)
     app.include_router(protected, prefix=API)
 

@@ -5,7 +5,8 @@ import "monaco-editor/languages/definitions/python/register.js";
 import "monaco-editor/features/register.all.js";
 import EditorWorker from "monaco-editor/editor/editor.worker.start.js?worker";
 import { useEffect, useRef } from "react";
-import type { Board } from "../api";
+import type { Board, HelpReference, SdkDoc, SdkMember, SdkSymbol } from "../api";
+import { loadHelp } from "../help/useHelp";
 
 // Monaco собран в бандл (без CDN): у платы может не быть интернета.
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
@@ -22,24 +23,35 @@ monaco.editor.defineTheme("pioneer-dark", {
   },
 });
 
-// ---- подсказки: SDK и пины платы (доска подставляется при монтировании редактора)
+// ---- подсказки: SDK (из справочника, сгенерированного из кода — docs/ideas/004) и пины платы
 let currentBoard: Board | null = null;
-
-const SDK: [string, string, string][] = [
-  ["Output", 'Output("${1:J9-7}")', "Цифровой выход: .on() .off() .toggle() .value"],
-  ["Input", 'Input("${1:J10-2}", debounce_ms=${2:30})', "Цифровой вход: @x.on_press / on_rise / on_fall / on_change"],
-  ["Pwm", 'Pwm("${1:J9-12}", freq=${2:100}, duty=${3:0.5})', "Soft-PWM ≤ 500 Гц, .duty 0…1"],
-  ["Adc", 'Adc("${1:J9-26}")', "АЦП 0…1.8 В: .volts"],
-  ["BoardLed", 'BoardLed("${1|user,power|}")', "Встроенный LED: .on() .off() .trigger('heartbeat')"],
-  ["I2C", 'I2C("${1:i2c1}", 0x${2:3C})', "Устройство I2C (интерфейс, адрес): read_reg / write_reg / write_read"],
-  ["UART", 'UART("${1:uart3}", baud=${2:9600})', "Порт (интерфейс): .write(b) .read(n, timeout)"],
-  ["SPI", 'SPI("${1:spi2}", cs=${2:0})', "SPI (интерфейс, CS): .xfer(bytes)"],
-  ["every", "@every(${1:1.0})\ndef ${2:tick}():\n    ${3:pass}", "Вызывать функцию каждые N секунд"],
-  ["after", "after(${1:1.0}, ${2:fn})", "Однократно через N секунд"],
-  ["log", "log(${1})", "Печать в лог скрипта"],
-];
+let reference: HelpReference | null = null;
+loadHelp().then((r) => (reference = r), () => {});
 
 const PIN_CTOR = /\b(Output|Input|Pwm|Adc)\(\s*["']([^"']*)$/;
+const BUS_CTOR = /\b(I2C|SPI|UART)\(\s*["']([^"']*)$/;
+const BUS_KIND: Record<string, string> = { I2C: "i2c", SPI: "spi", UART: "uart" };
+
+function docMarkdown(d: SdkDoc & { signature: string }, name?: string): monaco.IMarkdownString {
+  const parts = ["```python\n" + (name ? `${name}.` : "") + d.signature + "\n```", d.summary];
+  const args = Object.entries(d.args);
+  if (args.length) parts.push(args.map(([k, v]) => `- \`${k}\` — ${v}`).join("\n"));
+  if (d.returns) parts.push(`**Возвращает:** ${d.returns}`);
+  if (d.hardware) parts.push(`⚠ **Железо:** ${d.hardware}`);
+  if (d.example) parts.push("```python\n" + d.example + "\n```");
+  return { value: parts.join("\n\n") };
+}
+
+function findDoc(word: string): { d: SdkSymbol | SdkMember; owner?: string } | null {
+  if (!reference) return null;
+  const sym = reference.sdk.find((s) => s.name === word);
+  if (sym) return { d: sym };
+  for (const s of reference.sdk) {
+    const m = s.members.find((x) => x.name === word);
+    if (m) return { d: m, owner: s.name };
+  }
+  return null;
+}
 
 monaco.languages.registerCompletionItemProvider("python", {
   triggerCharacters: ['"', "'"],
@@ -49,10 +61,10 @@ monaco.languages.registerCompletionItemProvider("python", {
       endLineNumber: position.lineNumber, endColumn: position.column,
     });
     const word = model.getWordUntilPosition(position);
-    const m = PIN_CTOR.exec(before);
-    if (m && currentBoard) {
-      const adc = m[1] === "Adc";
-      const typed = m[2];
+    const pin = PIN_CTOR.exec(before);
+    if (pin && currentBoard) {
+      const adc = pin[1] === "Adc";
+      const typed = pin[2];
       const range = new monaco.Range(position.lineNumber, position.column - typed.length,
                                      position.lineNumber, position.column);
       return {
@@ -72,17 +84,92 @@ monaco.languages.registerCompletionItemProvider("python", {
           }),
       };
     }
+    const bus = BUS_CTOR.exec(before);
+    if (bus && currentBoard) {
+      const typed = bus[2];
+      const range = new monaco.Range(position.lineNumber, position.column - typed.length,
+                                     position.lineNumber, position.column);
+      const seen = new Set<string>();
+      return {
+        suggestions: currentBoard.interfaces
+          .filter((i) => i.kind === BUS_KIND[bus[1]] && !seen.has(i.controller) && seen.add(i.controller))
+          .map((i) => {
+            const variants = currentBoard!.interfaces.filter((v) => v.controller === i.controller);
+            const on = variants.find((v) => v.enabled);
+            return {
+              label: { label: i.controller,
+                       description: i.locked ? "системная консоль" : on ? Object.entries(on.pins).map(([p, r]) => `${p} ${r}`).join(", ") : "выключен (нужен оверлей)" },
+              kind: monaco.languages.CompletionItemKind.Value,
+              insertText: i.controller,
+              range,
+              sortText: (on && !i.locked ? "0" : "1") + i.controller,
+            };
+          }),
+      };
+    }
     const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn);
     return {
-      suggestions: SDK.map(([label, snippet, doc]) => ({
-        label,
-        kind: monaco.languages.CompletionItemKind.Function,
-        insertText: snippet,
+      suggestions: (reference?.sdk ?? []).filter((s) => s.kind !== "exception" || s.name === "PioneerError").map((s) => ({
+        label: s.name,
+        kind: s.kind === "class" ? monaco.languages.CompletionItemKind.Class : monaco.languages.CompletionItemKind.Function,
+        insertText: s.name === "every" ? "@every(${1:1.0})\ndef ${2:tick}():\n    ${3:pass}" : s.snippet ?? s.name,
         insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-        documentation: doc,
-        detail: "pioneer.sdk",
+        documentation: docMarkdown(s),
+        detail: s.summary,
         range,
       })),
+    };
+  },
+});
+
+monaco.languages.registerHoverProvider("python", {
+  provideHover(model, position) {
+    const w = model.getWordAtPosition(position);
+    const found = w && findDoc(w.word);
+    if (!w || !found) return null;
+    return {
+      range: new monaco.Range(position.lineNumber, w.startColumn, position.lineNumber, w.endColumn),
+      contents: [docMarkdown(found.d, found.owner)],
+    };
+  },
+});
+
+monaco.languages.registerSignatureHelpProvider("python", {
+  signatureHelpTriggerCharacters: ["(", ","],
+  signatureHelpRetriggerCharacters: [","],
+  provideSignatureHelp(model, position) {
+    const before = model.getValueInRange({
+      startLineNumber: Math.max(1, position.lineNumber - 5), startColumn: 1,
+      endLineNumber: position.lineNumber, endColumn: position.column,
+    });
+    // ближайшая незакрытая скобка и имя перед ней
+    let depth = 0;
+    let i = before.length - 1;
+    let commas = 0;
+    for (; i >= 0; i--) {
+      const c = before[i];
+      if (c === ")") depth++;
+      else if (c === "(") {
+        if (depth === 0) break;
+        depth--;
+      } else if (c === "," && depth === 0) commas++;
+    }
+    if (i < 0) return null;
+    const name = /(\w+)\s*$/.exec(before.slice(0, i))?.[1];
+    const found = name && findDoc(name);
+    if (!found) return null;
+    const d = found.d;
+    return {
+      value: {
+        signatures: [{
+          label: d.signature,
+          documentation: d.summary,
+          parameters: d.params.map((p) => ({ label: p.name, documentation: d.args[p.name] ?? "" })),
+        }],
+        activeSignature: 0,
+        activeParameter: Math.min(commas, Math.max(0, d.params.length - 1)),
+      },
+      dispose() {},
     };
   },
 });

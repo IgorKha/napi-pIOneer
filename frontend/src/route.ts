@@ -1,16 +1,31 @@
 import { useEffect, useState } from "react";
 
-/** Маршруты на хэше (#/board, #/scripts, #/scripts/<id>) — работают за любым префиксом nginx. */
-export type Route = { page: "board" } | { page: "scripts"; id?: string };
+/** Маршруты на хэше (#/board, #/scripts/<id>, #/projects/<id>, #/help/<раздел>/<якорь>) —
+ * работают за любым префиксом nginx. */
+export type Route =
+  | { page: "board" }
+  | { page: "scripts"; id?: string }
+  | { page: "projects"; id?: string }
+  | { page: "help"; section?: string; anchor?: string };
 
 function parse(hash: string): Route {
-  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
   if (parts[0] === "scripts") return { page: "scripts", id: parts[1] };
+  if (parts[0] === "projects") return { page: "projects", id: parts[1] };
+  if (parts[0] === "help") return { page: "help", section: parts[1], anchor: parts[2] };
   return { page: "board" };
 }
 
 export function href(r: Route): string {
-  return r.page === "scripts" ? `#/scripts${r.id ? `/${r.id}` : ""}` : "#/board";
+  switch (r.page) {
+    case "scripts":
+    case "projects":
+      return `#/${r.page}${r.id ? `/${r.id}` : ""}`;
+    case "help":
+      return `#/help${r.section ? `/${r.section}` : ""}${r.anchor ? `/${encodeURIComponent(r.anchor)}` : ""}`;
+    default:
+      return "#/board";
+  }
 }
 
 export function navigate(r: Route) {
@@ -27,7 +42,9 @@ export function useRoute(): Route {
   return route;
 }
 
-/** owner id из ResourceManager ("script:<id>") -> куда провалиться по клику. */
+/** owner id из ResourceManager ("script:<id>", "project:<id>") -> куда провалиться по клику. */
 export function ownerRoute(owner: string): Route | null {
-  return owner.startsWith("script:") ? { page: "scripts", id: owner.slice(7) } : null;
+  if (owner.startsWith("script:")) return { page: "scripts", id: owner.slice(7) };
+  if (owner.startsWith("project:")) return { page: "projects", id: owner.slice(8) };
+  return null;
 }

@@ -5,6 +5,7 @@ import { href, useRoute } from "./route";
 
 // Monaco (~3 МБ) грузится только на странице скриптов
 const ScriptsPage = lazy(() => import("./scripts/ScriptsPage").then((m) => ({ default: m.ScriptsPage })));
+const HelpPage = lazy(() => import("./help/HelpPage").then((m) => ({ default: m.HelpPage })));
 import { Login } from "./Login";
 import { useLive, type LiveStatus } from "./useLive";
 
@@ -77,7 +78,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         <span className="font-semibold tracking-tight">
           napi-p<span className="text-accent">IO</span>neer
         </span>
-        {([["board", "Плата"], ["scripts", "Скрипты"]] as const).map(([page, title]) => (
+        {([["board", "Плата"], ["scripts", "Скрипты"], ["help", "Справка"]] as const).map(([page, title]) => (
           <a key={page} href={href({ page })} aria-current={route.page === page ? "page" : undefined}
              className={`rounded px-2.5 py-1 text-xs ${route.page === page ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>
             {title}
@@ -98,7 +99,11 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         </div>
       </nav>
 
-      {route.page === "scripts" ? (
+      {route.page === "help" ? (
+        <Suspense fallback={<div className="p-8 text-muted">Загрузка…</div>}>
+          <HelpPage section={route.section} anchor={route.anchor} />
+        </Suspense>
+      ) : route.page === "scripts" ? (
         <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
           <ScriptsPage board={liveBoard} selected={route.id} liveLogs={scriptLogs} liveStatus={scriptStatus}
                        onError={showError} />
