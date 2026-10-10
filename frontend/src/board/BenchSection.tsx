@@ -74,7 +74,7 @@ function ModelControl({ board, model: m, run }: { board: Board; model: BenchMode
       return (
         <>
           <button
-            className={`rounded px-3 py-1 text-xs select-none ${s.pressed ? "bg-warn text-bg" : "bg-panel-2 hover:bg-[#3a3a3a]"}`}
+            className={`w-20 rounded py-1 text-center text-xs select-none ${s.pressed ? "bg-warn text-bg" : "bg-panel-2 hover:bg-[#3a3a3a]"}`}
             onPointerDown={() => act("press")} onPointerUp={() => act("release")}
             onPointerLeave={() => s.pressed && act("release")}
             onKeyDown={(e) => { if (e.key === " " && !e.repeat) { e.preventDefault(); act("press"); } }}
@@ -93,7 +93,7 @@ function ModelControl({ board, model: m, run }: { board: Board; model: BenchMode
           <span className="size-4 rounded-full border border-line"
                 style={{ background: b > 0 ? color : "#2a2a2a", opacity: b > 0 ? 0.35 + 0.65 * b : 1,
                          boxShadow: b > 0 ? `0 0 ${6 + 8 * b}px ${color}` : undefined }} />
-          <span className="text-xs text-muted">
+          <span className="w-16 text-xs text-muted">
             {b > 0 ? (b < 1 ? `${Math.round(b * 100)}%` : "горит") : "погашен"}
           </span>
         </>
@@ -125,7 +125,7 @@ function ModelControl({ board, model: m, run }: { board: Board; model: BenchMode
       );
     }
     case "wire":
-      return <span className="font-mono text-xs">{s.level ? "HIGH" : "LOW"}</span>;
+      return <span className="w-[4ch] font-mono text-xs">{s.level ? "HIGH" : "LOW"}</span>;
     default:
       return <span className="font-mono text-xs text-muted">{JSON.stringify(s)}</span>;
   }

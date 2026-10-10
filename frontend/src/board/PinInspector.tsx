@@ -96,8 +96,14 @@ function Control({ pin, st, run }: { pin: Pin; st: PinState; run: (p: Promise<un
       <div className="mb-3 flex items-center gap-2">
         {claim ? <Badge color={claim.mode === "gpio_out" ? "out" : "in"}>{MODE_LABEL[claim.mode]}</Badge>
                : <Badge color="free">Свободен</Badge>}
-        {claim && <span className="text-muted">{Object.values(claim.owners).join(", ")}</span>}
-        {value && <span className="ml-auto font-mono text-lg font-semibold text-pin-high">{value}</span>}
+        {/* владелец — сколько влезет (полностью в подсказке), значение — в слоте фиксированной ширины,
+            чтобы строка не прыгала при LOW ↔ HIGH и смене вольт */}
+        <span className="min-w-0 flex-1 truncate text-muted" title={claim ? Object.values(claim.owners).join(", ") : undefined}>
+          {claim && Object.values(claim.owners).join(", ")}
+        </span>
+        <span className="w-[8ch] shrink-0 text-right font-mono text-lg font-semibold tabular-nums text-pin-high">
+          {value}
+        </span>
       </div>
 
       {foreign ? (
