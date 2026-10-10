@@ -58,6 +58,8 @@ class Graph:
     nodes: dict[str, GNode] = field(default_factory=dict)
     edges: list[GEdge] = field(default_factory=list)
     groups: list[dict] = field(default_factory=list)
+    # состояние редактора, не влияющее на исполнение: положение Board-ноды ("@board") и т.п.
+    view: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, raw: dict | None) -> Graph:
@@ -69,11 +71,12 @@ class Graph:
                                      collapsed=bool(n.get("collapsed", False)), label=n.get("label"))
         g.edges = [GEdge(tuple(e["from"]), tuple(e["to"])) for e in raw.get("edges", [])]
         g.groups = list(raw.get("groups", []))
+        g.view = dict(raw.get("view", {}))
         return g
 
     def to_json(self) -> dict:
         return {"nodes": [n.to_json() for n in self.nodes.values()],
-                "edges": [e.to_json() for e in self.edges], "groups": self.groups}
+                "edges": [e.to_json() for e in self.edges], "groups": self.groups, "view": self.view}
 
     def copy(self) -> Graph:
         return copy.deepcopy(self)

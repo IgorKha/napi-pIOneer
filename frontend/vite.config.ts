@@ -4,6 +4,7 @@ import { defineConfig } from "vite";
 
 // В проде фронт отдаёт core под /pioneer/ (за штатным nginx платы).
 // PIONEER_CORE / PIONEER_UI_PORT — вторая пара dev-серверов рядом с первой.
+declare const process: { env: Record<string, string | undefined> }; // без @types/node
 const core = process.env.PIONEER_CORE ?? "127.0.0.1:8100";
 
 export default defineConfig({

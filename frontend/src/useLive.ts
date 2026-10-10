@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BenchModel, LedState, LogLine, PinState, ScriptStatus } from "./api";
+import type { BenchModel, LedState, LogLine, PinState, ProjectLive, ProjectLogLine, ProjectStatus, ScriptStatus } from "./api";
 
 const LOG_KEEP = 1000;
 
@@ -14,6 +14,11 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
   const [scriptLogs, setScriptLogs] = useState<Record<string, LogLine[]>>({});
   const [scriptStatus, setScriptStatus] = useState<Record<string, ScriptStatus>>({});
   const [status, setStatus] = useState<LiveStatus>("connecting");
+  // проекты: накопленные live-значения сокетов, лог и статусы
+  const [projectLive, setProjectLive] = useState<Record<string, ProjectLive>>({});
+  const [projectLogs, setProjectLogs] = useState<Record<string, ProjectLogLine[]>>({});
+  const [projectStatus, setProjectStatus] = useState<Record<string, ProjectStatus>>({});
+  const [socket, setSocket] = useState<WebSocket | null>(null);
 
   useEffect(() => {
     if (initialBench) setBench(Object.fromEntries(initialBench.map((m) => [m.id, m])));
@@ -28,7 +33,7 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
       setStatus("connecting");
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/pioneer/ws`);
-      ws.onopen = () => setStatus("open");
+      ws.onopen = () => { setStatus("open"); setSocket(ws); };
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === "pins") setPins((prev) => ({ ...prev, ...msg.pins }));
@@ -36,6 +41,11 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
         if (msg.type === "script_log")
           setScriptLogs((prev) => ({ ...prev, [msg.id]: [...(prev[msg.id] ?? []), ...msg.lines].slice(-LOG_KEEP) }));
         if (msg.type === "script_status") setScriptStatus((prev) => ({ ...prev, [msg.id]: msg.status }));
+        if (msg.type === "project_live")
+          setProjectLive((prev) => ({ ...prev, [msg.id]: mergeLive(prev[msg.id], msg) }));
+        if (msg.type === "project_log")
+          setProjectLogs((prev) => ({ ...prev, [msg.id]: [...(prev[msg.id] ?? []), ...msg.lines].slice(-LOG_KEEP) }));
+        if (msg.type === "project_status") setProjectStatus((prev) => ({ ...prev, [msg.id]: msg.status }));
         if (msg.type === "bench") {
           const upd = Object.fromEntries((msg.models as BenchModel[]).map((m) => [m.id, m]));
           setBench((prev) => (msg.full ? upd : { ...prev, ...upd }));
@@ -43,6 +53,7 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
       };
       ws.onclose = (e) => {
         setStatus("closed");
+        setSocket(null);
         if (e.code === 4401) return onUnauthorized(); // сессия истекла — не переподключаемся
         if (!closed) retry = window.setTimeout(connect, 1500);
       };
@@ -55,5 +66,21 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
     };
   }, [onUnauthorized]);
 
-  return { pins, bench, leds, scriptLogs, scriptStatus, status };
+  const resetProjectLive = (id: string, snapshot: ProjectLive) =>
+    setProjectLive((prev) => ({ ...prev, [id]: snapshot }));
+
+  return { pins, bench, leds, scriptLogs, scriptStatus, status, projectLive, projectLogs, projectStatus,
+           resetProjectLive, socket };
+}
+
+const EMPTY: ProjectLive = { values: {}, events: {}, views: {}, nodes: {} };
+
+function mergeLive(prev: ProjectLive | undefined, upd: Partial<ProjectLive>): ProjectLive {
+  const p = prev ?? EMPTY;
+  return {
+    values: { ...p.values, ...upd.values },
+    events: { ...p.events, ...upd.events },
+    views: { ...p.views, ...upd.views },
+    nodes: { ...p.nodes, ...upd.nodes },
+  };
 }

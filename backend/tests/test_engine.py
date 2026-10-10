@@ -335,3 +335,12 @@ def test_builtin_catalog_documented():
         assert len(nt.doc) > 40, f"{nt.key}: нет doc"
         for p in nt.params.values():
             assert p.title, f"{nt.key}.{p.name}: нет подписи"
+
+
+def test_board_view_ops(board):
+    g, inv, _ = apply_ops(Graph(), [{"op": "move", "node": "@board", "position": [-500, 20]},
+                                    {"op": "collapse", "node": "@board", "collapsed": True}], REG, board)
+    assert g.view["board"] == {"position": [-500.0, 20.0], "collapsed": True}
+    assert Graph.from_json(g.to_json()).view == g.view
+    g2, _, _ = apply_ops(g, inv, REG, board)
+    assert g2.view["board"] == {"position": [-420.0, 0.0], "collapsed": False}

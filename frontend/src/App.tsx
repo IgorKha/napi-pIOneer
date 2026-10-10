@@ -5,6 +5,7 @@ import { href, useRoute } from "./route";
 
 // Monaco (~3 МБ) грузится только на странице скриптов
 const ScriptsPage = lazy(() => import("./scripts/ScriptsPage").then((m) => ({ default: m.ScriptsPage })));
+const ProjectsPage = lazy(() => import("./projects/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 const HelpPage = lazy(() => import("./help/HelpPage").then((m) => ({ default: m.HelpPage })));
 import { Login } from "./Login";
 import { useLive, type LiveStatus } from "./useLive";
@@ -52,7 +53,8 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
   const [loadError, setLoadError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [initialBench, setInitialBench] = useState<BenchModel[] | null>(null);
-  const { pins: live, bench, leds, scriptLogs, scriptStatus, status } = useLive(initialBench, onUnauthorized);
+  const { pins: live, bench, leds, scriptLogs, scriptStatus, status, projectLive, projectLogs, projectStatus,
+          resetProjectLive } = useLive(initialBench, onUnauthorized);
   const route = useRoute();
   // плата с живыми захватами — для подсказок пинов в редакторе
   const liveBoard = useMemo(() => board && {
@@ -78,7 +80,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         <span className="font-semibold tracking-tight">
           napi-p<span className="text-accent">IO</span>neer
         </span>
-        {([["board", "Плата"], ["scripts", "Скрипты"], ["help", "Справка"]] as const).map(([page, title]) => (
+        {([["board", "Плата"], ["projects", "Проекты"], ["scripts", "Скрипты"], ["help", "Справка"]] as const).map(([page, title]) => (
           <a key={page} href={href({ page })} aria-current={route.page === page ? "page" : undefined}
              className={`rounded px-2.5 py-1 text-xs ${route.page === page ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>
             {title}
@@ -95,11 +97,23 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
             <span className={`size-2 rounded-full ${dot}`} />
             {label}
           </span>
+          <button onClick={() => confirm("Остановить все проекты и скрипты? Выходы уйдут в безопасное состояние.") &&
+                                  api.panic().catch((e: Error) => showError(e.message))}
+                  title="Паника: остановить всё" className="rounded border border-err/50 px-2 py-0.5 text-err hover:bg-err/15">
+            Стоп всё
+          </button>
           <button onClick={onLogout} className="hover:text-fg">Выйти</button>
         </div>
       </nav>
 
-      {route.page === "help" ? (
+      {route.page === "projects" ? (
+        liveBoard ? (
+          <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
+            <ProjectsPage board={liveBoard} selected={route.id} pinLive={live} live={projectLive} logs={projectLogs}
+                          status={projectStatus} resetLive={resetProjectLive} onError={showError} />
+          </Suspense>
+        ) : <div className="p-8 text-muted">Загрузка…</div>
+      ) : route.page === "help" ? (
         <Suspense fallback={<div className="p-8 text-muted">Загрузка…</div>}>
           <HelpPage section={route.section} anchor={route.anchor} />
         </Suspense>

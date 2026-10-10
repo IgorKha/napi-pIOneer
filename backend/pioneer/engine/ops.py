@@ -87,7 +87,8 @@ def _node(g: Graph, nid: Any) -> GNode:
 def _add_node(g: Graph, op: dict, reg: NodeRegistry, board, created) -> list[dict]:
     nt = reg.resolve(op["type"])
     nid = op.get("id") or new_node_id(g)
-    if not isinstance(nid, str) or not nid.replace("_", "").replace("-", "").isalnum() or len(nid) > 40:
+    if not isinstance(nid, str) or not nid.replace("_", "").replace("-", "").isalnum() or len(nid) > 40 \
+            or not nid.isascii():
         raise ValueError(f"плохой id ноды {nid!r}")
     if nid in g.nodes:
         raise ValueError(f"нода {nid} уже есть")
@@ -175,7 +176,18 @@ def _disconnect(g: Graph, op: dict, reg, board, created) -> list[dict]:
     return [{"op": "connect", **e.to_json()}]
 
 
+BOARD = "@board"  # Board-нода: одна на проект, не удаляется; живёт в graph.view
+
+
+def _view_node(g: Graph) -> dict:
+    return g.view.setdefault("board", {"position": [-420.0, 0.0], "collapsed": False})
+
+
 def _move(g: Graph, op: dict, reg, board, created) -> list[dict]:
+    if op.get("node") == BOARD:
+        v = _view_node(g)
+        old, v["position"] = v["position"], _pos(op.get("position"))
+        return [{"op": "move", "node": BOARD, "position": old}]
     n = _node(g, op.get("node"))
     old = n.position
     n.position = _pos(op.get("position"))
@@ -192,6 +204,10 @@ def _rename(g: Graph, op: dict, reg, board, created) -> list[dict]:
 
 
 def _collapse(g: Graph, op: dict, reg, board, created) -> list[dict]:
+    if op.get("node") == BOARD:
+        v = _view_node(g)
+        old, v["collapsed"] = v["collapsed"], bool(op.get("collapsed", True))
+        return [{"op": "collapse", "node": BOARD, "collapsed": old}]
     n = _node(g, op.get("node"))
     old, n.collapsed = n.collapsed, bool(op.get("collapsed", True))
     return [{"op": "collapse", "node": n.id, "collapsed": old}]

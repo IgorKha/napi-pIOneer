@@ -274,6 +274,7 @@ export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
   groups: unknown[];
+  view?: { board?: { position: [number, number]; collapsed: boolean } };
 }
 
 export interface Issue {
