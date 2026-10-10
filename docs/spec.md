@@ -411,7 +411,7 @@ napi-pioneer/
 
 ### 11.1 Результаты проверки на плате (2026-10-11, NapiLinux 0.3.1)
 
-Скрипт: [`tools/probe/gpio_probe.py`](../../tools/probe/gpio_probe.py), петля J9-16 (GPIO2_B2, out) ↔ J9-18 (GPIO2_B1, in).
+Скрипт: [`tools/probe/gpio_probe.py`](../tools/probe/gpio_probe.py), петля J9-16 (GPIO2_B2, out) ↔ J9-18 (GPIO2_B1, in).
 
 **1. soft_reset.** `POST /system/soft_reset` → `fw_setenv resetroot yes` → `boot.scr` передаёт `rootrwreset=yes` → `/init` (из rootfs, `#!/bin/sh` = bash) выполняет `rm -rf $ROOT_RWMOUNT/*` **до** монтирования overlay. Стирается **весь корень p7**, а не только `upperdir`. Глоб `*` не захватывает dot-каталоги → `/mount/rfs/rw/.pioneer/` переживает сброс. Режим `backupbehaviour=restore` тоже делает `rm -rf $ROOT_RWMOUNT/*` и восстанавливает из бэкапа на USB. Риск: `/init` лежит в rootfs и может поменяться с OTA → `install.sh` и сервис при старте проверяют, что в `/init` по-прежнему `rm -rf $ROOT_RWMOUNT/*` (иначе — предупреждение в UI «данные могут не пережить сброс»).
 Попутно: `fw_printenv` пишет «Cannot read environment, using default» — env на флеше ещё ни разу не сохранялся (CRC невалиден), U-Boot работает на встроенном дефолте; первый `fw_setenv` создаст env.
