@@ -7,7 +7,7 @@ export default defineConfig({
   base: "/pioneer/",
   plugins: [react(), tailwindcss()],
   // чанк страницы скриптов — это Monaco (~2.7 МБ, ~700 КБ gzip), грузится лениво
-  build: { chunkSizeWarningLimit: 3000 },
+  build: { chunkSizeWarningLimit: 4500 },
   server: {
     port: 5173,
     proxy: {
