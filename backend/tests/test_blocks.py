@@ -130,3 +130,53 @@ def test_blocks_api(client):
     assert client.delete(f"{API}/blocks/{r['id']}").status_code == 200
     types = {t["type"] for t in client.get(f"{API}/node-types").json()["types"]}
     assert "user.hysteresis@1" not in types
+
+
+SCRIPT2 = '''from pioneer.block import node, Node, In, Out, Number, Bool
+
+@node(id="s", title="Порог")
+class S(Node):
+    x = In(Number, 0)
+    hot = Out(Bool)
+
+    def on_change(self, changed):
+        self.hot.set(self.x > 10)
+'''
+
+
+def test_script_node(env):
+    bm, pm, reg = env
+    p = pm.create("Скрипт")
+    r = pm.apply_ops(p.id, [
+        {"op": "add_node", "id": "n", "type": "builtin.ui_number"},
+        {"op": "add_node", "id": "s", "type": "builtin.script"},
+        {"op": "add_node", "id": "w", "type": "builtin.watch"},
+        {"op": "connect", "from": ["n", "value"], "to": ["s", "value"]},
+        {"op": "connect", "from": ["s", "out"], "to": ["w", "value"]},
+    ])
+    assert r["validation"]["can_start"]
+    full = pm.get(p.id)
+    assert [i["name"] for i in full["node_types"]["s"]["inputs"]] == ["value"]
+    pm.start(p.id)
+    pm.ui(p.id, "n", 21)
+    assert pm.engine.runtimes[p.id].sample("s", "out").value == 42
+    pm.stop(p.id)
+
+    # новый код: сокеты другие — провода к исчезнувшим сняты, undo возвращает
+    r = pm.apply_ops(p.id, [{"op": "set_param", "node": "s", "name": "code", "value": SCRIPT2}])
+    assert pm.get(p.id)["graph"]["edges"] == []
+    pm.apply_ops(p.id, [{"op": "connect", "from": ["n", "value"], "to": ["s", "x"]},
+                        {"op": "connect", "from": ["s", "hot"], "to": ["w", "value"]}])
+    pm.start(p.id)
+    pm.ui(p.id, "n", 11)
+    assert pm.engine.runtimes[p.id].sample("s", "hot").value is True
+    pm.stop(p.id)
+    undo = pm.apply_ops(p.id, [{"op": "disconnect", "to": ["s", "x"]}, {"op": "disconnect", "to": ["w", "value"]}])
+    pm.apply_ops(p.id, r["inverse"])
+    edges = {tuple(map(tuple, (e["from"], e["to"]))) for e in pm.get(p.id)["graph"]["edges"]}
+    assert edges == {(("n", "value"), ("s", "value")), (("s", "out"), ("w", "value"))}
+    assert undo
+
+    # ошибка в коде: сохраняется, но не запускается
+    r = pm.apply_ops(p.id, [{"op": "set_param", "node": "s", "name": "code", "value": "x = ("}])
+    assert not r["validation"]["can_start"] and "скрипт: синтаксис" in r["validation"]["incomplete"][0]["message"]

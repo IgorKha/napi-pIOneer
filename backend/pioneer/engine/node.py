@@ -29,7 +29,7 @@ from pioneer.engine.types import DEFAULTS, SOCKET_COLORS, SOCKET_TYPES, EventVal
 if TYPE_CHECKING:
     from pioneer.engine.runtime import ProjectRuntime, Timer
 
-PARAM_KINDS = ("bool", "int", "float", "str", "choice", "pin", "interface", "led", "cron", "expression")
+PARAM_KINDS = ("bool", "int", "float", "str", "choice", "pin", "interface", "led", "cron", "expression", "code")
 _NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 _RESERVED = {"id", "params", "label"}  # атрибуты экземпляра Node
 
@@ -174,6 +174,7 @@ class NodeType:
     params: dict[str, Param] = field(default_factory=dict)
     breaks_cycle: bool = False  # Delay/Latch/Feedback: через неё можно замкнуть цикл
     hidden: bool = False
+    error: str | None = None  # динамический тип не построился (ошибка в коде Скрипта)
 
     @property
     def key(self) -> str:
@@ -195,6 +196,8 @@ class NodeRegistry:
 
     def __init__(self):
         self.types: dict[str, NodeType] = {}
+        # типы, чьи сокеты зависят от параметров ноды (Скрипт: сокеты — из кода): key -> resolver(params)
+        self.dynamic: dict[str, Callable[[dict], NodeType]] = {}
 
     def add(self, nt: NodeType) -> None:
         if nt.key in self.types:
@@ -205,6 +208,7 @@ class NodeRegistry:
         """Реестр сервиса: встроенные + свои блоки (BUILTIN не трогаем)."""
         r = NodeRegistry()
         r.types = dict(self.types)
+        r.dynamic = dict(self.dynamic)
         return r
 
     def remove(self, key: str) -> None:
@@ -215,6 +219,12 @@ class NodeRegistry:
             return self.types[key]
         except KeyError:
             raise KeyError(f"нет типа ноды {key!r}") from None
+
+    def for_node(self, gnode) -> NodeType:
+        """Тип конкретной ноды графа: для динамических — по её параметрам."""
+        nt = self.get(gnode.type)
+        resolver = self.dynamic.get(nt.key)
+        return resolver(gnode.params) if resolver else nt
 
     def resolve(self, ref: str) -> NodeType:
         """`builtin.and@1` или `builtin.and` (последняя версия)."""

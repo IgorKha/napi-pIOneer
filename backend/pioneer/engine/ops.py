@@ -99,8 +99,9 @@ def _add_node(g: Graph, op: dict, reg: NodeRegistry, board, created) -> list[dic
             raise ValueError(f"у {nt.title} нет параметра {k!r}")
         params[k] = check_param(p, v, board)
     inputs = {}
+    sockets = reg.dynamic[nt.key](params) if nt.key in reg.dynamic else nt  # Скрипт: входы — из кода
     for k, v in (op.get("inputs") or {}).items():
-        i = nt.inputs.get(k)
+        i = sockets.inputs.get(k)
         if i is None:
             raise ValueError(f"у {nt.title} нет входа {k!r}")
         inputs[k] = check_value(v, i.type)
@@ -123,18 +124,28 @@ def _remove_node(g: Graph, op: dict, reg, board, created) -> list[dict]:
 
 def _set_param(g: Graph, op: dict, reg: NodeRegistry, board, created) -> list[dict]:
     n = _node(g, op.get("node"))
-    nt = reg.get(n.type)
+    nt = reg.for_node(n)
     p = nt.params.get(op.get("name"))
     if p is None:
         raise ValueError(f"у {nt.title} нет параметра {op.get('name')!r}")
     old = n.params.get(p.name, p.default)
     n.params[p.name] = check_param(p, op.get("value"), board)
-    return [{"op": "set_param", "node": n.id, "name": p.name, "value": old}]
+    inverse = [{"op": "set_param", "node": n.id, "name": p.name, "value": old}]
+    if reg.get(n.type).key in reg.dynamic:
+        # сокеты Скрипта зависят от кода: провода к исчезнувшим сокетам снимаются (и вернутся при undo)
+        new = reg.for_node(n)
+        gone = [e for e in g.edges if (e.dst[0] == n.id and e.dst[1] not in new.inputs)
+                or (e.src[0] == n.id and e.src[1] not in new.outputs)]
+        g.edges = [e for e in g.edges if e not in gone]
+        for k in [k for k in n.inputs if k not in new.inputs]:
+            inverse.append({"op": "set_input_value", "node": n.id, "name": k, "value": n.inputs.pop(k)})
+        inverse += [{"op": "connect", **e.to_json()} for e in gone]
+    return inverse
 
 
 def _set_input_value(g: Graph, op: dict, reg: NodeRegistry, board, created) -> list[dict]:
     n = _node(g, op.get("node"))
-    nt = reg.get(n.type)
+    nt = reg.for_node(n)
     i = nt.inputs.get(op.get("name"))
     if i is None:
         raise ValueError(f"у {nt.title} нет входа {op.get('name')!r}")
@@ -148,7 +159,7 @@ def _set_input_value(g: Graph, op: dict, reg: NodeRegistry, board, created) -> l
 
 def _connect(g: Graph, op: dict, reg: NodeRegistry, board, created) -> list[dict]:
     src, dst = _sock(op.get("from"), "from"), _sock(op.get("to"), "to")
-    a, b = reg.get(_node(g, src[0]).type), reg.get(_node(g, dst[0]).type)
+    a, b = reg.for_node(_node(g, src[0])), reg.for_node(_node(g, dst[0]))
     out, inp = a.outputs.get(src[1]), b.inputs.get(dst[1])
     if out is None:
         raise ValueError(f"у {a.title} нет выхода {src[1]!r}")

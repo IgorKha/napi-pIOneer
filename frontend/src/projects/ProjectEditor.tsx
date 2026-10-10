@@ -59,6 +59,9 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   const flow = useReactFlow();
   if (import.meta.env.DEV) (window as unknown as { __flow: unknown }).__flow = flow; // отладка/проверки
   const schemas = useMemo(() => new Map(types.map((t) => [t.type, t])), [types]);
+  // схема конкретной ноды: у Скрипта сокеты из кода — приходят с проектом
+  const schemaOf = useCallback((n: { id: string; type: string } | undefined) =>
+    n ? project?.node_types?.[n.id] ?? schemas.get(n.type) : undefined, [project, schemas]);
   const status = liveStatus ?? project?.status;
   const running = status?.state === "running";
 
@@ -138,7 +141,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
   // ---- граф -> узлы/рёбра React Flow
   // параметры-пины типа ноды (провод от платы к гнезду __pin:<параметр>)
   const pinParams = useCallback((type: string) => (schemas.get(type)?.params ?? []).filter((p) => p.kind === "pin").map((p) => p.name),
-                                [schemas]);
+                                [schemas]); // параметры-пины у динамических нод не бывают
   const paramOf = (handle: string | null | undefined) => (handle?.startsWith(PIN_HANDLE) ? handle.slice(PIN_HANDLE.length) : null);
 
   useEffect(() => {
@@ -164,7 +167,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
         out.push(keep<FlowNode>({
           id: n.id, type: "pnode", position: { x: n.position[0], y: n.position[1] },
           data: {
-            gnode: n, schema: schemas.get(n.type), board, live, running, actions,
+            gnode: n, schema: schemaOf(n), board, live, running, actions,
             connected: new Set(g.edges.filter((e) => e.to[0] === n.id).map((e) => e.to[1])),
             issues: issues.filter((i) => i.node === n.id),
           },
@@ -172,13 +175,13 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
       }
       return out;
     });
-  }, [project, schemas, board, pinLive, live, running, actions, send, pinParams]);
+  }, [project, schemaOf, board, pinLive, live, running, actions, send, pinParams]);
 
   const edges: Edge[] = useMemo(() => {
     if (!project) return [];
     const g = project.graph;
     const out: Edge[] = g.edges.map((e) => {
-      const type = schemas.get(g.nodes.find((n) => n.id === e.from[0])?.type ?? "")?.outputs.find((o) => o.name === e.from[1])?.type ?? "Any";
+      const type = schemaOf(g.nodes.find((n) => n.id === e.from[0]))?.outputs.find((o) => o.name === e.from[1])?.type ?? "Any";
       return {
         id: `${e.from.join(".")}->${e.to.join(".")}`, source: e.from[0], sourceHandle: e.from[1],
         target: e.to[0], targetHandle: e.to[1],
@@ -196,7 +199,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
       });
     }
     return out;
-  }, [project, schemas, pinLive, pinParams]);
+  }, [project, schemaOf, pinLive, pinParams]);
 
   // ---- события канваса
   const onNodesChange = useCallback((changes: NodeChange<AnyNode>[]) => {
@@ -210,9 +213,9 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
 
   const typeOf = useCallback((nodeId: string | null, handle: string | null | undefined, dir: "out" | "in") => {
     const gn = project?.graph.nodes.find((n) => n.id === nodeId);
-    const sc = gn && schemas.get(gn.type);
+    const sc = schemaOf(gn);
     return (dir === "out" ? sc?.outputs : sc?.inputs)?.find((s) => s.name === handle)?.type;
-  }, [project, schemas]);
+  }, [project, schemaOf]);
 
   const isValidConnection: IsValidConnection = useCallback((c) => {
     if (c.source === BOARD_ID) {
@@ -370,7 +373,7 @@ function Editor({ id, board, types, pinLive, live, liveLog, liveStatus, resetLiv
             </div>
           )}
         </div>
-        <Inspector project={project} node={selNode} schema={selNode ? schemas.get(selNode.type) : undefined} board={board}
+        <Inspector project={project} node={selNode} schema={selNode ? schemaOf(selNode) : undefined} board={board}
                    live={live} running={running} apply={(ops) => send(ops)} onSelect={selectNode} onMeta={meta} />
       </div>
 

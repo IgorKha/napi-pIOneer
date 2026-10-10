@@ -229,7 +229,7 @@ export interface SocketSchema {
 
 export interface ParamSchema {
   name: string;
-  kind: "bool" | "int" | "float" | "str" | "choice" | "pin" | "interface" | "led" | "cron" | "expression";
+  kind: "bool" | "int" | "float" | "str" | "choice" | "pin" | "interface" | "led" | "cron" | "expression" | "code";
   title: string;
   doc: string;
   default: unknown;
@@ -322,6 +322,7 @@ export interface ProjectLogLine {
 
 export interface ProjectFull extends ProjectMeta {
   graph: Graph;
+  node_types: Record<string, NodeTypeSchema>; // схемы нод с сокетами из параметров (Скрипт)
   validation: Validation;
   log: ProjectLogLine[];
 }

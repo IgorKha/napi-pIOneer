@@ -1,8 +1,11 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import type { Board, GraphNode, Issue, NodeTypeSchema, Op, ParamSchema, ProjectFull, ProjectLive } from "../api";
 import { Markdown } from "../help/Markdown";
 import { href } from "../route";
 import { formatLive } from "./sockets";
+
+// Monaco — только когда открыли код Скрипта
+const CodeModal = lazy(() => import("./CodeModal").then((m) => ({ default: m.CodeModal })));
 
 interface Props {
   project: ProjectFull;
@@ -120,6 +123,8 @@ function ParamField({ p, value, board, self, onCommit }: {
   );
 
   switch (p.kind) {
+    case "code":
+      return <CodeParam title={p.title} value={String(value ?? "")} board={board} onCommit={onCommit} />;
     case "bool":
       return (
         <label className="flex cursor-pointer items-start gap-2" title={p.doc}>
@@ -229,6 +234,26 @@ function ProjectPanel({ project, onSelect, onMeta, running }: Props) {
         Ноды — из палитры слева (перетащить или кликнуть). Провода — от выхода к входу; пин — протянуть от платы к ноде.
         Delete — удалить, ⌘Z / ⌘⇧Z — отмена и повтор.
       </p>
+    </div>
+  );
+}
+
+function CodeParam({ title, value, board, onCommit }: { title: string; value: string; board: Board; onCommit: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const lines = value.split("\n").length;
+  return (
+    <div>
+      <span className="mb-0.5 block text-muted">{title}</span>
+      <button onClick={() => setOpen(true)}
+              className="w-full rounded border border-line bg-bg px-2 py-1.5 text-left font-mono text-[11px] hover:border-accent">
+        {lines} строк · редактировать…
+      </button>
+      {open && (
+        <Suspense fallback={null}>
+          <CodeModal value={value} board={board} onClose={() => setOpen(false)}
+                     onSave={(v) => { onCommit(v); setOpen(false); }} />
+        </Suspense>
+      )}
     </div>
   );
 }

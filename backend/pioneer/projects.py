@@ -112,7 +112,10 @@ class ProjectManager:
 
     def get(self, pid: str) -> dict:
         meta, graph = self._read(pid)
-        return {**asdict(meta), "graph": graph.to_json(), "status": self.status(pid),
+        # схемы нод с сокетами из параметров (Скрипт) — палитра их не знает
+        dyn = {nid: self.registry.for_node(n).schema() for nid, n in graph.nodes.items()
+               if n.type in self.registry.types and self.registry.get(n.type).key in self.registry.dynamic}
+        return {**asdict(meta), "graph": graph.to_json(), "status": self.status(pid), "node_types": dyn,
                 "validation": self._validate(pid, graph).to_json(), "manifest": self.manifest(pid)}
 
     def create(self, name: str, description: str = "", graph: dict | None = None) -> ProjectMeta:

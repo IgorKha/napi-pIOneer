@@ -130,7 +130,10 @@ class ProjectRuntime:
         self.engine, self.project_id, self.name, self.graph, self.rev = engine, project_id, name, graph, rev
         self.owner, self.owner_name = f"project:{project_id}", f"проект «{name}»"
         self.hw = ProjectHW(engine.hw, self.owner, self.owner_name)
-        self.types: dict[str, NodeType] = {nid: engine.registry.get(n.type) for nid, n in graph.nodes.items()}
+        self.types: dict[str, NodeType] = {nid: engine.registry.for_node(n) for nid, n in graph.nodes.items()}
+        for nid, nt in self.types.items():
+            if nt.error:
+                raise StartError(f"{nid}: {nt.error}")
         self.nodes: dict[str, Node] = {
             nid: self.types[nid].cls(self, nid, dict(n.params), n.label) for nid, n in graph.nodes.items()}
         self.rank = ranks(graph, self.types)

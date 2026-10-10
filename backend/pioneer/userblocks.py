@@ -264,6 +264,8 @@ class BlockManager:
         self.dir = data_dir / "blocks"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.registry = registry
+        if SCRIPT_KEY not in registry.types:
+            register_script_type(registry, data_dir / "script_cache")
         self._types: dict[str, list[str]] = {}  # slug -> ключи зарегистрированных типов
         self._lock = threading.RLock()
         for meta in sorted(self.dir.glob("*.json")):
@@ -369,3 +371,96 @@ class BlockManager:
             self._types[slug] = []
             raise
         self._types[slug] = new
+
+
+# ---------------------------------------------------------------- нода «Скрипт»
+SCRIPT_KEY = "builtin.script@1"
+SCRIPT_TEMPLATE = '''from pioneer.block import node, Node, In, Out, Number
+
+
+@node(id="script", title="Скрипт")
+class Script(Node):
+    """Код этой ноды. Входы/выходы объявляются как в своих блоках."""
+
+    value = In(Number, 0, title="Вход")
+    out = Out(Number, title="Выход")
+
+    def on_change(self, changed):
+        self.out.set(self.value * 2)
+'''
+SCRIPT_DOC = """
+Быстрый одноразовый блок: код на Python живёт прямо в ноде этого проекта (в палитру не
+попадает). Синтаксис — как у своих блоков (`pioneer.block`): входы, выходы и параметры
+ноды берутся из кода — после правки кода нода перестраивается, провода к исчезнувшим
+сокетам снимаются (вернутся по ⌘Z).
+
+Исполняется в процессе блоков проекта, обработчик — не дольше 1 с. Для повторного
+использования в других проектах — вынесите код на страницу «Блоки».
+"""
+
+
+class ScriptTypes:
+    """Resolver динамического типа «Скрипт»: схема по хэшу кода, кэш на диске
+    (data/script_cache/<sha>.py + .json) — после перезапуска сервиса код не перепроверяется."""
+
+    def __init__(self, cache_dir: Path):
+        self.dir = cache_dir
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self._mem: dict[str, Any] = {}
+        self._lock = threading.Lock()
+
+    def __call__(self, params: dict):
+        import hashlib
+        code = params.get("code") or SCRIPT_TEMPLATE
+        h = hashlib.sha256(code.encode()).hexdigest()[:20]
+        with self._lock:
+            if h in self._mem:
+                return self._mem[h]
+            py, js = self.dir / f"{h}.py", self.dir / f"{h}.json"
+            if not py.exists():
+                py.write_text(code)
+            try:
+                res = json.loads(js.read_text())
+            except (OSError, ValueError):
+                res = extract_schema(py)
+                js.write_text(json.dumps(res, ensure_ascii=False))
+            self._mem[h] = nt = self._build(res, py)
+            return nt
+
+    def _build(self, res: dict, py: Path):
+        reg = NodeRegistry()
+        code_param = {"name": "code", "kind": "code", "title": "Код", "doc": "Python (pioneer.block)",
+                      "default": SCRIPT_TEMPLATE}
+        error = None
+        schema = None
+        if not res.get("ok"):
+            error = f"скрипт: {res.get('error')}"
+        elif len(res["nodes"]) != 1:
+            error = "скрипт: в коде должна быть ровно одна нода @node"
+        else:
+            schema = res["nodes"][0]
+            if any(p["name"] == "code" for p in schema["params"]):
+                error = "скрипт: параметр с именем code занят"
+        if error:
+            schema = {"id": "script", "title": "Скрипт", "inputs": [], "outputs": [], "params": []}
+        schema = {**schema, "params": [code_param, *schema["params"]], "category": "Скрипт", "color": "#6a4c93",
+                  "doc": (schema.get("doc") or "") + "\n\n" + SCRIPT_DOC.strip()}
+        try:
+            cls = _proxy_type(schema, py, reg)
+        except (ValueError, AssertionError, TypeError) as e:
+            schema = {**schema, "inputs": [], "outputs": [], "params": [code_param]}
+            cls = _proxy_type(schema, py, NodeRegistry())
+            error = f"скрипт: {e}"
+        nt = cls.TYPE
+        nt.error = error
+        return nt
+
+
+def register_script_type(registry: NodeRegistry, cache_dir: Path) -> None:
+    class ScriptBase(BlockProxy):
+        FILE = ""
+        BLOCK_ID = "script"
+        code = Param("code", SCRIPT_TEMPLATE, title="Код", doc="Python (pioneer.block)")
+    node("builtin.script", title="Скрипт", category="Скрипт", color="#6a4c93", doc=SCRIPT_DOC,
+         registry=registry)(ScriptBase)
+    registry.dynamic[SCRIPT_KEY] = ScriptTypes(cache_dir)

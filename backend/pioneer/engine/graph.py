@@ -158,7 +158,7 @@ def check_param(p: Param, value: Any, board: Board | None) -> Any:
             if p.min is not None and value < p.min or p.max is not None and value > p.max:
                 raise ValueError(f"допустимо {p.min if p.min is not None else '…'}…"
                                  f"{p.max if p.max is not None else '…'}")
-        case "str" | "expression" | "cron" | "pin" | "interface" | "led" | "choice":
+        case "str" | "expression" | "cron" | "pin" | "interface" | "led" | "choice" | "code":
             if not isinstance(value, str):
                 raise ValueError("ожидается строка")
     match p.kind:
@@ -231,10 +231,12 @@ def validate(graph: Graph, registry: NodeRegistry, board: Board | None = None, *
     types: dict[str, NodeType] = {}
     for n in graph.nodes.values():
         try:
-            nt = types[n.id] = registry.get(n.type)
+            nt = types[n.id] = registry.for_node(n)
         except KeyError as e:
             rep.errors.append(Issue(str(e.args[0]), node=n.id))
             continue
+        if nt.error:
+            rep.incomplete.append(Issue(nt.error, node=n.id, param="code"))
         for name, value in n.params.items():
             p = nt.params.get(name)
             if p is None:
