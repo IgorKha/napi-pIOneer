@@ -78,6 +78,7 @@ class ProjectManager:
         self._pending_logs: dict[str, list[dict]] = {}
         self._dropped: dict[str, int] = {}
         self._status_dirty: set[str] = set()
+        self.on_running = []  # колбэки после старта/остановки проекта (MQTT describe)
         self.on_pins = lambda *pins: None  # LiveHub.mark
         self.on_leds = lambda: None
 
@@ -238,6 +239,11 @@ class ProjectManager:
     def _pins_changed(self) -> None:
         self.on_pins(*self.hw.board.pins)
         self.on_leds()
+        for cb in self.on_running:
+            try:
+                cb()
+            except Exception:
+                log.exception("on_running")
 
     def status(self, pid: str) -> dict:
         st = asdict(self._status.get(pid, Status()))

@@ -82,7 +82,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         <span className="font-semibold tracking-tight">
           napi-p<span className="text-accent">IO</span>neer
         </span>
-        {([["board", "Плата"], ["projects", "Проекты"], ["blocks", "Блоки"], ["scripts", "Скрипты"], ["secrets", "Секреты"], ["help", "Справка"]] as const).map(([page, title]) => (
+        {([["board", "Плата"], ["projects", "Проекты"], ["blocks", "Блоки"], ["scripts", "Скрипты"], ["secrets", "Настройки"], ["help", "Справка"]] as const).map(([page, title]) => (
           <a key={page} href={href({ page })} aria-current={route.page === page ? "page" : undefined}
              className={`rounded px-2.5 py-1 text-xs ${route.page === page ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>
             {title}

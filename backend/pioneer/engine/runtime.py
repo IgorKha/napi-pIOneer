@@ -518,6 +518,8 @@ class Engine:
         self.runtimes: dict[str, ProjectRuntime] = {}
         self.wave_hooks: list[Callable[[ProjectRuntime, Wave], None]] = []
         self.on_log: Callable[[str, dict], None] = lambda pid, line: None
+        self.mqtt = None  # pioneer.mqtt.MqttBridge: ноды «Публикация», «Связь»
+        self.remote = None  # pioneer.remote.Remote: публикация состояний (MQTT)
         self.secrets = None  # SecretStore: {{secret:имя}} в параметрах нод (spec 6)
         self._wave_ids = itertools.count(1)
         self._seq = itertools.count()

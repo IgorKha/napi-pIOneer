@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import auth, bench, blocks, board, help, hooks, projects, remote, scripts, secrets
+from pioneer.api import auth, bench, blocks, board, help, hooks, projects, remote, scripts, secrets, settings
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
 from pioneer.board import load_board, parse_uenv_overlays
@@ -21,6 +21,8 @@ from pioneer.resources import ResourceManager
 from pioneer.nodes import registry
 from pioneer.projects import ProjectManager
 from pioneer.scripts import ScriptManager
+from pioneer.mqtt import MqttBridge, SettingsStore
+from pioneer.remote import Remote
 from pioneer.secrets_store import SecretStore
 from pioneer.userblocks import BlockManager
 
@@ -56,6 +58,11 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.blocks = BlockManager(cfg.data_dir, reg)
         app.state.projects = pm = ProjectManager(cfg.data_dir, app.state.hw, reg)
         app.state.secrets = pm.engine.secrets = SecretStore(cfg.data_dir)
+        app.state.remote = pm.engine.remote = Remote(pm)
+        app.state.settings = settings = SettingsStore(cfg.data_dir)
+        app.state.mqtt = pm.engine.mqtt = MqttBridge(settings, app.state.secrets, app.state.remote)
+        pm.on_running.append(app.state.mqtt.publish_describe)
+        app.state.mqtt.start()
         pm.on_pins, pm.on_leds = live.mark, live.mark_leds
         live.add_source(pm.drain)
         live.on_message("ui", lambda m: pm.ui(m["project"], m["node"], m.get("value")))
@@ -64,6 +71,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         await asyncio.to_thread(pm.start_autostart)
         yield
         await asyncio.to_thread(pm.stop_all)
+        app.state.mqtt.stop()
         pm.close()
         sm.stop_all()
         await live.stop()
@@ -85,6 +93,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     protected.include_router(help.router)
     protected.include_router(blocks.router)
     protected.include_router(secrets.router)
+    protected.include_router(settings.router)
     app.include_router(public, prefix=API)
     app.include_router(protected, prefix=API)
 

@@ -348,6 +348,22 @@ export interface ProjectLive {
   nodes: Record<string, { state: string; error: string | null }>;
 }
 
+export interface MqttSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+  tls: boolean;
+  device_id: string;
+  base: string;
+}
+
+export interface MqttState {
+  settings: MqttSettings;
+  status: { enabled: boolean; connected: boolean; error: string | null; broker: string; prefix: string };
+}
+
 export interface BlockMeta {
   id: string;
   name: string;
@@ -392,6 +408,8 @@ export const api = {
   projectLive: (id: string) => call<ProjectLive>(`/projects/${id}/live`),
   projectUi: (id: string, node: string, value: unknown) => call(`/projects/${id}/nodes/${node}/ui`, { value }),
   panic: () => call("/panic", {}),
+  mqtt: () => call<MqttState>("/settings/mqtt"),
+  mqttSave: (s: MqttSettings) => call<MqttState>("/settings/mqtt", s, "PUT"),
   secrets: () => call<{ names: string[] }>("/secrets"),
   secretsUpdate: (values: Record<string, string | null>) => call<{ names: string[] }>("/secrets", values, "PUT"),
   blocks: () => call<BlockMeta[]>("/blocks"),

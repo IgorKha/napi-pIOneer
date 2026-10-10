@@ -333,6 +333,9 @@ class State(Node):
         self.current = {"value": jsonable(s.value if s else self.value, 100_000),
                         "t": s.ts if s else None, "source": str(s.origin) if s else None}
         self.show(self.current)
+        remote = getattr(self._rt.engine, "remote", None)
+        if remote is not None:
+            remote.state_changed(self.name, self.current)
 
 
 @node("builtin.arbiter", title="Арбитр", category="Логика", color="#3b7a57", doc="""
@@ -365,3 +368,61 @@ class Arbiter(Node):
             return
         self.value.set(getattr(self, best[0]))
         self.source.set(str(best[1].origin))
+
+
+@node("builtin.publish", title="Публикация", category=CAT, color=COLOR, doc="""
+Публикует событие или значение в MQTT: топик `pioneer/<плата>/event/<имя>`, тело — JSON
+значения. Если вход «Когда» подключён — по событию, иначе — при каждом изменении значения.
+«Сохранять» = retained: новый подписчик сразу получит последнее значение.
+
+Брокер — страница «Настройки» → MQTT.
+
+Пример: Цифровой вход (Включение) → Публикация `door.opened`.
+""")
+class Publish(Node):
+    name = Param("str", "", title="Имя", required=True, doc="Последняя часть топика: латиница, цифры, . _ -")
+    retain = Param("bool", False, title="Сохранять (retained)")
+    when = In("Event", title="Когда")
+    value = In("Any", title="Значение")
+
+    def _bridge(self):
+        b = getattr(self._rt.engine, "mqtt", None)
+        if b is None:
+            raise NodeError("MQTT не настроен — страница «Настройки»")
+        return b
+
+    def on_event(self, name, ev):
+        v = self.value if self.connected("value") else ev.payload
+        self._bridge().publish_event(self.name, jsonable(v, 100_000), self.retain)
+
+    def on_change(self, changed):
+        if not self.connected("when"):
+            self._bridge().publish_event(self.name, jsonable(self.value, 100_000), self.retain)
+
+
+@node("builtin.mqtt_link", title="Связь", category=CAT, color=COLOR, doc="""
+Состояние связи с MQTT-брокером: «Онлайн» и события «Потеряна» / «Восстановлена».
+Позволяет увести выходы в безопасное положение, если сервер управления недоступен.
+
+Пример: Связь (Онлайн) → И ← Команда (Флаг) → Цифровой выход: без связи — выключено.
+""")
+class MqttLink(Node):
+    online = Out("Bool", title="Онлайн")
+    lost = Out("Event", title="Потеряна")
+    restored = Out("Event", title="Восстановлена")
+
+    def setup(self):
+        self._b = getattr(self._rt.engine, "mqtt", None)
+        if self._b is not None:
+            self._b.links.append((self._rt, self))
+
+    def start(self):
+        self.online.set(bool(self._b and self._b.connected))
+
+    def link_changed(self, on: bool):
+        self.online.set(on)
+        (self.restored if on else self.lost).emit()
+
+    def stop(self):
+        if getattr(self, "_b", None) is not None:
+            self._b.links[:] = [(r, n) for r, n in self._b.links if n is not self]
