@@ -69,7 +69,7 @@ class CodeTree:
         finally:
             Path(tmp).unlink(missing_ok=True)
 
-    def files(self) -> list[dict]:
+    def files(self, *, hashes: bool = True) -> list[dict]:
         out = []
         for parent, dirs, files in os.walk(self.root, followlinks=False):
             dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith(".pioneer-"))
@@ -85,7 +85,7 @@ class CodeTree:
                     entry = {"path": rel, "kind": "file", "size": size}
                     if size > FILE_LIMIT:
                         entry["oversized"] = True
-                    else:
+                    elif hashes:
                         entry["sha256"] = hashlib.sha256(p.read_bytes()).hexdigest()
                     out.append(entry)
                 else:
@@ -107,19 +107,22 @@ class CodeTree:
             p = self.path(name)
             if len(data) > FILE_LIMIT:
                 raise TreeError("файл больше 5 МБ")
-            entries = self.files()
+            entries = self.files(hashes=False)
             total = sum(e.get("size", 0) for e in entries if not e.get("oversized")) - (p.stat().st_size if p.is_file() and p.stat().st_size <= FILE_LIMIT else 0)
             if total + len(data) > TREE_LIMIT or len(entries) + len(PurePosixPath(name).parts) > MAX_ENTRIES:
                 raise TreeError("превышен лимит проекта (50 МБ / 2000 файлов и папок)")
             self._write(p, data)
-            # Python считает старый .pyc свежим при правке той же длины в ту же секунду.
-            if p.suffix == ".py":
-                for cached in (p.parent / "__pycache__").glob(p.stem + ".*.pyc"):
-                    self.path(cached.relative_to(self.root).as_posix()).unlink()
+            self._invalidate(p)
+
+    def _invalidate(self, p):
+        # Same-size edits in one second can otherwise retain a stale .pyc.
+        if p.suffix == ".py":
+            for cached in (p.parent / "__pycache__").glob(p.stem + ".*.pyc"):
+                self.path(cached.relative_to(self.root).as_posix()).unlink()
 
     def mkdir(self, name: str) -> None:
         with self.lock:
-            if len(self.files()) + len(PurePosixPath(name).parts) > MAX_ENTRIES:
+            if len(self.files(hashes=False)) + len(PurePosixPath(name).parts) > MAX_ENTRIES:
                 raise TreeError("слишком много файлов и папок")
             self.path(name).mkdir(parents=True, exist_ok=True)
 
@@ -142,7 +145,7 @@ class CodeTree:
             p = self.path(name)
             if p.is_dir():
                 # Проверяем и вложенные симлинки перед рекурсивным удалением.
-                CodeTree(p).files()
+                CodeTree(p).files(hashes=False)
                 shutil.rmtree(p)
             else:
                 p.unlink()
@@ -150,7 +153,7 @@ class CodeTree:
     def export_to(self, target) -> None:
         with self.lock, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr(META, json.dumps(self.meta(), ensure_ascii=False))
-            entries = self.files()
+            entries = self.files(hashes=False)
             if any(e.get("oversized") for e in entries) or sum(e.get("size", 0) for e in entries) > TREE_LIMIT:
                 raise TreeError("данные превышают лимиты экспорта; перенесите большие файлы отдельно")
             for e in entries:
@@ -168,8 +171,8 @@ class CodeTree:
         """Проверить архив на копии до записи, распаковывать по одному файлу."""
         with self.lock, tempfile.TemporaryDirectory(prefix=".pioneer-", dir=self.root.parent) as d:
             copy = CodeTree(Path(d) / "tree")
-            self.files()  # запрещаем симлинки до copytree
-            shutil.copytree(self.root, copy.root, ignore=shutil.ignore_patterns("__pycache__"))
+            self.files(hashes=False)  # запрещаем симлинки до copytree
+            shutil.copytree(self.root, copy.root, copy_function=os.link, ignore=shutil.ignore_patterns("__pycache__"))
             staged: dict[str, bool] = {}
             try:
                 with zipfile.ZipFile(io.BytesIO(data) if isinstance(data, bytes) else data) as z:
@@ -190,11 +193,18 @@ class CodeTree:
                         if total > TREE_LIMIT:
                             raise TreeError("архив больше 50 МБ после распаковки")
                         staged[name] = info.is_dir()
-                        copy.mkdir(name) if info.is_dir() else copy.write(name, z.read(info))
+                        copy.path(name).mkdir(parents=True, exist_ok=True) if info.is_dir() else copy._write(copy.path(name), z.read(info))
             except (zipfile.BadZipFile, RuntimeError) as e:
                 raise TreeError("повреждённый или зашифрованный ZIP") from e
+            entries = copy.files(hashes=False)
+            if sum(e.get("size", 0) for e in entries if not e.get("oversized")) > TREE_LIMIT:
+                raise TreeError("превышен лимит проекта (50 МБ)")
             for name, is_dir in staged.items():
-                self.mkdir(name) if is_dir else self.write(name, copy.read(name))
+                if is_dir:
+                    self.path(name).mkdir(parents=True, exist_ok=True)
+                else:
+                    self._write(self.path(name), copy.read(name))
+                    self._invalidate(self.path(name))
 
 
 def project_tree(data_dir: Path, kind: str, ident: str) -> CodeTree:

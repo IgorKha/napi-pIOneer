@@ -176,3 +176,21 @@ def test_review_9_uenv_transaction_restores_all_targets(tmp_path, monkeypatch):
     with pytest.raises(OSError):service.commit(hashlib.sha256(boot.read_bytes()).hexdigest(),'new\n',{config:b'new config',overlay:b'new'})
     assert boot.read_text()=='old\n' and config.read_text()=='old config' and not overlay.exists()
     assert boot.stat().st_mode&0o777==0o644 and config.stat().st_mode&0o777==0o600
+
+
+def test_review_10_writes_and_batch_import_do_not_hash_tree(tmp_path, monkeypatch):
+    import io, zipfile
+    from pioneer.codetree import CodeTree
+    root=tmp_path/"code";root.mkdir();t=CodeTree(root);t.set_meta({"entry":"main.py"})
+    t.write("main.py",b"pass")
+    def no_hash(*args):raise AssertionError("mutations must not hash existing files")
+    monkeypatch.setattr("pioneer.codetree.hashlib.sha256",no_hash)
+    t.write("main.py",b"value=1");t.mkdir("folder")
+    buf=io.BytesIO()
+    with zipfile.ZipFile(buf,"w") as z:
+        for i in range(50):z.writestr(f"folder/f{i}.py","value=1")
+    original=CodeTree.files;scans=[]
+    def files(self,**kw):scans.append(self.root);return original(self,**kw)
+    monkeypatch.setattr(CodeTree,"files",files)
+    t.import_zip(buf.getvalue())
+    assert len(scans)==2 and t.read("folder/f49.py")==b"value=1"
