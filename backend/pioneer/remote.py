@@ -69,9 +69,11 @@ class Remote:
             return result
         finally:
             with self._lock:
-                self._recent[key] = result
-                while len(self._recent) > _RECENT_MAX:
-                    self._recent.popitem(last=False)
+                # Only executed commands (including application error replies) are durable.
+                if result[1] == 200:
+                    self._recent[key] = result
+                    while len(self._recent) > _RECENT_MAX:
+                        self._recent.popitem(last=False)
                 slot[1] = result
                 self._pending.pop(key, None)
                 slot[0].set()

@@ -709,3 +709,51 @@ def test_review_26_concurrent_uart_prepares_open_one_hub(hw, monkeypatch):
     assert not errors and all(not thread.is_alive() for thread in threads)
     assert len(opened) == 1
     assert len(hw._uart_hubs["uart1"].subscriptions) == 2
+
+
+def test_review_27_rejected_id_can_run_after_project_restart(client, monkeypatch):
+    from pioneer.remote import Remote
+
+    pm = client.app.state.projects
+    p = pm.create("Retry rejected")
+    pm.apply_ops(
+        p.id,
+        [{"op": "add_node", "id": "cmd", "type": "builtin.command", "params": {"name": "retry"}}],
+    )
+    pm.start(p.id)
+    remote = Remote(pm)
+    inject = pm.engine.inject_call
+    calls = []
+
+    def race(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            pm.stop(p.id)
+        return inject(*args, **kwargs)
+
+    monkeypatch.setattr(pm.engine, "inject_call", race)
+    rejected = remote.execute_command("retry", {"id": "one"}, "http")
+    assert rejected[1] == 409
+    pm.start(p.id)
+    done = remote.execute_command("retry", {"id": "one"}, "http")
+    assert done == ({"id": "one", "ok": True}, 200)
+    assert remote.execute_command("retry", {"id": "one"}, "http") == done
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("status", [404, 408, 409, 422, 504])
+def test_review_27_transient_failures_not_cached(client, monkeypatch, status):
+    from pioneer.remote import Remote
+
+    remote = Remote(client.app.state.projects)
+    results = iter(
+        [
+            ({"id": "one", "ok": False, "error": "transient"}, status),
+            ({"id": "one", "ok": False, "result": "application error"}, 200),
+        ]
+    )
+    monkeypatch.setattr(remote, "_execute_command", lambda *a: next(results))
+    assert remote.execute_command("retry", {"id": "one"}, "http")[1] == status
+    executed = remote.execute_command("retry", {"id": "one"}, "http")
+    assert executed[1] == 200 and not executed[0]["ok"]
+    assert remote.execute_command("retry", {"id": "one"}, "http") == executed
