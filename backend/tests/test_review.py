@@ -87,3 +87,31 @@ def test_review_4_large_runtime_file_does_not_break_workspace(client):
     tree.delete("large.csv")
     with (tree.root/"large.csv").open("wb") as f:f.truncate(FILE_LIMIT+1)
     sm.delete(sid);assert not tree.root.exists()
+
+
+def test_review_5_unexpected_rpc_error_responds_and_recovers(hw, tmp_path, monkeypatch):
+    from pioneer.scripts import ScriptManager, _Runner
+    from conftest import wait_for
+    original = _Runner._handle
+    def fail(self, op, **args):
+        if op == "acquire": raise AssertionError("unexpected HAL failure")
+        return original(self, op, **args)
+    monkeypatch.setattr(_Runner, "_handle", fail)
+    sm=ScriptManager(tmp_path,hw)
+    try:
+        sid=sm.create("RPC", 'from pioneer.sdk import Output, log\ntry:\n Output("J9-7")\nexcept Exception:\n log("RECOVERED")\n').id
+        sm.start(sid)
+        assert wait_for(lambda:sm.status(sid).state == "exited",5)
+        assert "RECOVERED" in str(sm.log_tail(sid))
+    finally:sm.stop_all()
+
+
+def test_review_5_sdk_rpc_timeout_cleans_pending(monkeypatch):
+    import socket
+    from pioneer.sdk import _rpc
+    monkeypatch.setattr(_rpc,"RPC_TIMEOUT_S",.03)
+    a,b=socket.socketpair();c=_rpc._Client(a)
+    try:
+        with pytest.raises(_rpc.PioneerError,match="core не ответил"):c.call("read")
+        assert not c._pending
+    finally:b.close();a.close()

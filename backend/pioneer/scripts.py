@@ -154,7 +154,8 @@ class _Runner:
                 try:
                     result = self._handle(req.pop("op"), **req)
                     self._send({"id": rid, "ok": True, "result": result})
-                except (ResourceConflict, ValueError, KeyError, OSError, RuntimeError, TypeError) as e:
+                except Exception as e:
+                    log.exception("script %s RPC failed", self.meta.id)
                     self._send({"id": rid, "ok": False, "error": _err_text(e)})
         except (OSError, ValueError):
             pass
