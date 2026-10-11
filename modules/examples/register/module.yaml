@@ -1,0 +1,13 @@
+id: register_demo
+version: 1
+title: Регистр I2C — учебный модуль
+entry: block.py
+connection: Учебный протокол, I2C1, адрес 0x48. На стенде физическое подключение не нужно. Это не драйвер реального датчика.
+model:
+  entry: simulation.py
+  params:
+    bus: {type: int, default: 1}
+    addr: {type: int, default: 72}
+    value: {type: int, default: 1234}
+  actions: [set]
+widget: widget.js
