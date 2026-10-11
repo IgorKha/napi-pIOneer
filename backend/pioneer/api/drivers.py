@@ -1,4 +1,5 @@
 """Authenticated, explicit operations for the fixed kernel-driver catalog."""
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
@@ -15,7 +16,9 @@ def guard(fn, *args):
     except DriverError as e:
         raise HTTPException(e.code, str(e)) from None
     except (OSError, ValueError):
-        raise HTTPException(422, "драйвер недоступен: проверьте файлы, права и журнал сервиса") from None
+        raise HTTPException(
+            422, "драйвер недоступен: проверьте файлы, права и журнал сервиса"
+        ) from None
 
 
 @router.get("")
@@ -73,7 +76,9 @@ def packages(request: Request):
 @router.post("/packages")
 async def upload_package(request: Request, confirmed: bool = False):
     if not confirmed:
-        raise HTTPException(422, "подтвердите установку доверенного пакета: код будет исполняться в ядре")
+        raise HTTPException(
+            422, "подтвердите установку доверенного пакета: код будет исполняться в ядре"
+        )
     data = await limited_body(request, UPLOAD_LIMIT)
     return guard(request.app.state.kernel_packages.install, data)
 
@@ -124,22 +129,27 @@ def apply_package(ident: str, body: PackageApply, request: Request):
         raise HTTPException(422, "подтвердите изменение uEnv после просмотра")
     return guard(request.app.state.kernel_packages.apply, ident, body.enabled, body.hash)
 
+
 class Bias(BaseModel):
     pin: str
     bias: str
+
 
 class BiasApply(Bias):
     hash: str
     confirmed: bool = False
 
-@router.get('/gpio-bias')
-def bias_config(request: Request):
-    return {'values': request.app.state.pulls.config()}
 
-@router.post('/gpio-bias/plan')
+@router.get("/gpio-bias")
+def bias_config(request: Request):
+    return {"values": request.app.state.pulls.config()}
+
+
+@router.post("/gpio-bias/plan")
 def bias_plan(body: Bias, request: Request):
     return guard(request.app.state.pulls.preview, body.pin, body.bias)
 
-@router.post('/gpio-bias/apply')
+
+@router.post("/gpio-bias/apply")
 def bias_apply(body: BiasApply, request: Request):
     return guard(request.app.state.pulls.apply, body.pin, body.bias, body.hash, body.confirmed)

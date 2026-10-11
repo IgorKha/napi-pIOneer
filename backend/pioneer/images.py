@@ -1,4 +1,5 @@
 """Лёгкий контракт Image: байты PNG/JPEG; ограниченное сохранение без декодирования."""
+
 from __future__ import annotations
 
 import re
@@ -45,7 +46,10 @@ class ImageStore:
             folder = self.directory(pid)
             folder.mkdir(parents=True, exist_ok=True)
             files = [p for p in folder.iterdir() if IMAGE_NAME.fullmatch(p.name)]
-            if len(files) >= MAX_SAVED or sum(p.stat().st_size for p in files) + len(raw) > MAX_STORAGE:
+            if (
+                len(files) >= MAX_SAVED
+                or sum(p.stat().st_size for p in files) + len(raw) > MAX_STORAGE
+            ):
                 raise NodeError("хранилище снимков заполнено (100 файлов / 50 МБ на проект)")
             name = uuid.uuid4().hex + "." + ext
             path = folder / name

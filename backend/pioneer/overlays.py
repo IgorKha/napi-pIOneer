@@ -1,4 +1,5 @@
 """uEnv changes require a fresh preview hash, known .dtbo and idle affected resources."""
+
 from dataclasses import asdict
 import difflib
 import hashlib
@@ -26,8 +27,14 @@ class OverlayManager:
     def preview(self, enable, disable):
         path = self.cfg.uenv_file
         if not path.exists():
-            return {**asdict(self.board.plan_interfaces(enable, disable)), "writable": False,
-                    "hash": None, "diff": "", "missing": [], "claims": {}}
+            return {
+                **asdict(self.board.plan_interfaces(enable, disable)),
+                "writable": False,
+                "hash": None,
+                "diff": "",
+                "missing": [],
+                "claims": {},
+            }
         if path.is_symlink() or path.stat().st_size > 64 * 1024:
             raise OverlayError("uEnv должен быть обычным файлом до 64 КБ")
         text = path.read_text()
@@ -37,14 +44,31 @@ class OverlayManager:
         pending = load_board(self.cfg.board_file, parse_uenv_overlays(text))
         plan = pending.plan_interfaces(enable, disable)
         updated = re.sub(r"^overlays=.*$", "overlays=" + " ".join(plan.overlays), text, flags=re.M)
-        missing = [o for o in plan.overlays if not (self.cfg.overlays_dir / (o + ".dtbo")).is_file()]
+        missing = [
+            o for o in plan.overlays if not (self.cfg.overlays_dir / (o + ".dtbo")).is_file()
+        ]
         pins = {p for i in set(enable + disable) for p in self.board.interfaces[i].pins}
         ctls = {self.board.interfaces[i].controller for i in set(enable + disable)}
-        claims = {rid: c.owners for rid, c in self.hw.res.claims.items()
-                  if rid in pins or rid.split("@")[0].split(".")[0].split(":")[0] in ctls}
-        return {**asdict(plan), "writable": True, "hash": hashlib.sha256(text.encode()).hexdigest(),
-                "diff": "".join(difflib.unified_diff(text.splitlines(True), updated.splitlines(True), fromfile=str(path), tofile="после применения")),
-                "missing": missing, "claims": claims}
+        claims = {
+            rid: c.owners
+            for rid, c in self.hw.res.claims.items()
+            if rid in pins or rid.split("@")[0].split(".")[0].split(":")[0] in ctls
+        }
+        return {
+            **asdict(plan),
+            "writable": True,
+            "hash": hashlib.sha256(text.encode()).hexdigest(),
+            "diff": "".join(
+                difflib.unified_diff(
+                    text.splitlines(True),
+                    updated.splitlines(True),
+                    fromfile=str(path),
+                    tofile="после применения",
+                )
+            ),
+            "missing": missing,
+            "claims": claims,
+        }
 
     def apply(self, enable, disable, expected_hash):
         with self.lock:
@@ -63,7 +87,9 @@ class OverlayManager:
             text = path.read_text()
             if hashlib.sha256(text.encode()).hexdigest() != expected_hash:
                 raise OverlayError("uEnv изменился — обновите предпросмотр", 409)
-            updated = re.sub(r"^overlays=.*$", "overlays=" + " ".join(plan["overlays"]), text, flags=re.M)
+            updated = re.sub(
+                r"^overlays=.*$", "overlays=" + " ".join(plan["overlays"]), text, flags=re.M
+            )
             try:
                 result = self.uenv.commit(expected_hash, updated)
             except UEnvError as e:

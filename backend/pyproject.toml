@@ -21,6 +21,7 @@ dev = [
     "pytest>=8",
     "httpx>=0.27",
     "pip==24.0",
+    "ruff==0.14.0",
 ]
 
 [tool.uv]
@@ -29,3 +30,6 @@ package = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100

@@ -2,6 +2,7 @@
 
 No arbitrary module name, shell command, DTS or sysfs path comes from the browser.
 """
+
 from __future__ import annotations
 
 import difflib
@@ -48,10 +49,14 @@ class KernelDrivers:
 
     def command(self, args):
         try:
-            return subprocess.run(args, check=True, text=True, capture_output=True, timeout=15).stdout.strip()
+            return subprocess.run(
+                args, check=True, text=True, capture_output=True, timeout=15
+            ).stdout.strip()
         except (OSError, subprocess.SubprocessError) as e:
             # Never echo uploaded content or uncontrolled command output.
-            raise DriverError("не удалось выполнить " + Path(args[0]).name + ": проверьте журнал ядра") from e
+            raise DriverError(
+                "не удалось выполнить " + Path(args[0]).name + ": проверьте журнал ядра"
+            ) from e
 
     def real(self):
         if self.hw.hal.name != "linux":
@@ -68,13 +73,19 @@ class KernelDrivers:
 
     def validate_module(self, path):
         data = path.read_bytes()
-        if (len(data) < 64 or len(data) > MODULE_LIMIT or data[:6] != b"\x7fELF\x02\x01"
-                or struct.unpack_from("<HH", data, 16) != (1, 183)):
+        if (
+            len(data) < 64
+            or len(data) > MODULE_LIMIT
+            or data[:6] != b"\x7fELF\x02\x01"
+            or struct.unpack_from("<HH", data, 16) != (1, 183)
+        ):
             raise DriverError("нужен несжатый ELF-модуль ARM64 (.ko) до 1 МиБ")
         if self.command(["modinfo", "-F", "name", str(path)]) != "dht11":
             raise DriverError("в этом разделе разрешён только модуль dht11 для DHT11/DHT22")
         if self.command(["modinfo", "-F", "vermagic", str(path)]) != self.expected_vermagic():
-            raise DriverError("модуль собран для другого ядра/ABI — пересоберите для " + self.release)
+            raise DriverError(
+                "модуль собран для другого ядра/ABI — пересоберите для " + self.release
+            )
         return hashlib.sha256(data).hexdigest()
 
     def system_module(self):
@@ -87,7 +98,11 @@ class KernelDrivers:
             return False
 
     def installed(self):
-        return self.module.is_file() or bool(self.packages and self.packages.package_for_module("dht11")) or self.system_module()
+        return (
+            self.module.is_file()
+            or bool(self.packages and self.packages.package_for_module("dht11"))
+            or self.system_module()
+        )
 
     def config(self):
         try:
@@ -98,7 +113,9 @@ class KernelDrivers:
     def iio_device(self):
         for p in sorted(self.cfg.iio_dir.glob("iio:device*")):
             try:
-                if (p / "name").read_text().strip() in ("dht11", OVERLAY) and (p / "of_node").resolve().name == OVERLAY:
+                if (p / "name").read_text().strip() in ("dht11", OVERLAY) and (
+                    p / "of_node"
+                ).resolve().name == OVERLAY:
                     return p
             except OSError:
                 continue
@@ -108,14 +125,26 @@ class KernelDrivers:
         real = self.hw.hal.name == "linux"
         module = self.installed()
         device = self.iio_device() if real else None
-        return {"id": "dht22", "title": "DHT22 / AM2302", "module": "dht11", "kernel": self.release,
-                "real": real, "installed": module, "uploaded": self.module.is_file(),
-                "loaded": real and (self.cfg.kernel_sys_dir / "module" / "dht11").is_dir(),
-                "active": device is not None, "device": device.name if device else None,
-                "package": self.packages.package_for_module("dht11") if self.packages else None,
-                "config": self.config(), "pins": [p.id for p in self.board.pins.values() if p.gpio],
-                "sample": self.sample, "requires_reboot": True,
-                "reason": "" if module else "CONFIG_DHT11 выключен или модуль отсутствует. Загрузите dht11.ko из сборки текущего ядра."}
+        return {
+            "id": "dht22",
+            "title": "DHT22 / AM2302",
+            "module": "dht11",
+            "kernel": self.release,
+            "real": real,
+            "installed": module,
+            "uploaded": self.module.is_file(),
+            "loaded": real and (self.cfg.kernel_sys_dir / "module" / "dht11").is_dir(),
+            "active": device is not None,
+            "device": device.name if device else None,
+            "package": self.packages.package_for_module("dht11") if self.packages else None,
+            "config": self.config(),
+            "pins": [p.id for p in self.board.pins.values() if p.gpio],
+            "sample": self.sample,
+            "requires_reboot": True,
+            "reason": ""
+            if module
+            else "CONFIG_DHT11 выключен или модуль отсутствует. Загрузите dht11.ko из сборки текущего ядра.",
+        }
 
     def install(self, data):
         self.real()
@@ -125,7 +154,9 @@ class KernelDrivers:
             os.chmod(p, 0o600)
             digest = self.validate_module(p)
             if (self.cfg.kernel_sys_dir / "module" / "dht11").exists():
-                raise DriverError("драйвер уже загружен; заменять его можно после отключения и перезагрузки", 409)
+                raise DriverError(
+                    "драйвер уже загружен; заменять его можно после отключения и перезагрузки", 409
+                )
             CodeTree._write(self.module, data)
             os.chmod(self.module, 0o600)
             log.info("DHT11 module installed kernel=%s sha256=%s", self.release, digest)
@@ -168,7 +199,7 @@ class KernelDrivers:
         if p is None or p.gpio is None:
             raise DriverError("выберите GPIO-пин гребёнки J9/J10")
         bank, line = p.gpio.chip, p.gpio.line
-        return f'''/dts-v1/;
+        return f"""/dts-v1/;
 /plugin/;
 / {{
     fragment@0 {{ target-path = "/"; __overlay__ {{
@@ -181,7 +212,7 @@ class KernelDrivers:
         pioneer-dht22 {{ pioneer_dht22_pin: data-pin {{ rockchip,pins = <{bank} {line} 0 &pcfg_pull_up>; }}; }};
     }}; }};
 }};
-'''
+"""
 
     def boot_text(self):
         p = self.cfg.uenv_file
@@ -198,17 +229,37 @@ class KernelDrivers:
             dts, dtbo = Path(tmp) / "sensor.dts", Path(tmp) / "sensor.dtbo"
             dts.write_text(source)
             self.command(["dtc", "-@", "-I", "dts", "-O", "dtb", "-o", str(dtbo), str(dts)])
-            values = dict(line.split("=", 1) for line in text.splitlines() if "=" in line and not line.startswith("#"))
+            values = dict(
+                line.split("=", 1)
+                for line in text.splitlines()
+                if "=" in line and not line.startswith("#")
+            )
             fdtfile = values.get("fdtfile", "")
             if not re.fullmatch(r"[A-Za-z0-9_.-]+\.dtb", fdtfile):
                 raise DriverError("неверный fdtfile в uEnv")
             chain = []
-            for key, base in (("overlays", self.cfg.overlays_dir), ("user_overlays", self.cfg.user_overlays_dir)):
+            for key, base in (
+                ("overlays", self.cfg.overlays_dir),
+                ("user_overlays", self.cfg.user_overlays_dir),
+            ):
                 for name in values.get(key, "").split():
                     if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
                         raise DriverError("неверное имя оверлея в uEnv")
-                    chain.append(dtbo if name == overlay_name and key == "user_overlays" else base / (name + ".dtbo"))
-            self.command(["fdtoverlay", "-i", str(self.cfg.uenv_file.parent / fdtfile), "-o", str(Path(tmp) / "validated.dtb"), *map(str, chain)])
+                    chain.append(
+                        dtbo
+                        if name == overlay_name and key == "user_overlays"
+                        else base / (name + ".dtbo")
+                    )
+            self.command(
+                [
+                    "fdtoverlay",
+                    "-i",
+                    str(self.cfg.uenv_file.parent / fdtfile),
+                    "-o",
+                    str(Path(tmp) / "validated.dtb"),
+                    *map(str, chain),
+                ]
+            )
             return dtbo.read_bytes()
 
     def _plan(self, pin, enabled):
@@ -220,31 +271,63 @@ class KernelDrivers:
         if enabled:
             names.append(OVERLAY)
         line = "user_overlays=" + " ".join(names)
-        updated = re.sub(r"^user_overlays=.*$", line, text, flags=re.M) if m else text + ("" if text.endswith("\n") else "\n") + line + "\n"
+        updated = (
+            re.sub(r"^user_overlays=.*$", line, text, flags=re.M)
+            if m
+            else text + ("" if text.endswith("\n") else "\n") + line + "\n"
+        )
         blockers = []
         if self.hw.hal.name != "linux":
             blockers.append("на стенде загрузка драйверов и изменение boot запрещены")
         if enabled:
             pending = load_board(self.cfg.board_file, parse_uenv_overlays(text))
             if pending.function(pin) != "gpio":
-                blockers.append("после загрузки пин будет занят интерфейсом " + str(pending.function(pin)))
+                blockers.append(
+                    "после загрузки пин будет занят интерфейсом " + str(pending.function(pin))
+                )
             if not self.installed():
                 blockers.append("нужен совместимый модуль dht11.ko")
-            if self.board.function(pin) != "gpio" and any(u.node != "/" + OVERLAY for u in self.board._users(pin)):
+            if self.board.function(pin) != "gpio" and any(
+                u.node != "/" + OVERLAY for u in self.board._users(pin)
+            ):
                 blockers.append("пин занят интерфейсом или другим драйвером ядра")
             if self.board.function(pin) != "gpio" and not self.board.dt:
                 blockers.append("пин занят интерфейсом")
             if pin in self.hw.res.claims:
-                blockers.append("пин используется: " + ", ".join(self.hw.res.claims[pin].owners.values()))
+                blockers.append(
+                    "пин используется: " + ", ".join(self.hw.res.claims[pin].owners.values())
+                )
         compiled = False
         blob = b""
         if enabled and self.hw.hal.name == "linux":
             blob = self.compile(source, updated)
             compiled = True
-        digest = hashlib.sha256((text + source + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
-        return {"pin": pin, "enabled": enabled, "hash": digest, "uenv_hash": hashlib.sha256(text.encode()).hexdigest(), "source": source,
-                "diff": "".join(difflib.unified_diff(text.splitlines(True), updated.splitlines(True), fromfile="uEnv.txt", tofile="после применения")),
-                "blockers": blockers, "ready": not blockers, "compiled": compiled, "needs_reboot": True}, updated, blob
+        digest = hashlib.sha256(
+            (text + source + json.dumps(self.config(), sort_keys=True)).encode()
+        ).hexdigest()
+        return (
+            {
+                "pin": pin,
+                "enabled": enabled,
+                "hash": digest,
+                "uenv_hash": hashlib.sha256(text.encode()).hexdigest(),
+                "source": source,
+                "diff": "".join(
+                    difflib.unified_diff(
+                        text.splitlines(True),
+                        updated.splitlines(True),
+                        fromfile="uEnv.txt",
+                        tofile="после применения",
+                    )
+                ),
+                "blockers": blockers,
+                "ready": not blockers,
+                "compiled": compiled,
+                "needs_reboot": True,
+            },
+            updated,
+            blob,
+        )
 
     def preview(self, pin, enabled):
         with self.overlays.lock, self.lock:
@@ -263,7 +346,9 @@ class KernelDrivers:
                 if enabled and pin in self.hw.res.claims:
                     raise DriverError("пин занят — остановите владельца", 409)
             source = self.source(pin) if enabled else ""
-            current = hashlib.sha256((self.boot_text() + source + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
+            current = hashlib.sha256(
+                (self.boot_text() + source + json.dumps(self.config(), sort_keys=True)).encode()
+            ).hexdigest()
             if current != expected_hash:
                 raise DriverError("uEnv изменился во время проверки — обновите предпросмотр", 409)
             return self._commit(pin, enabled, text, blob, plan["uenv_hash"])
@@ -285,14 +370,25 @@ class KernelDrivers:
                 return self.sample
             device = self.iio_device()
             if device is None:
-                raise DriverError("DHT22 не зарегистрирован в IIO: проверьте модуль, оверлей и перезагрузку", 409)
+                raise DriverError(
+                    "DHT22 не зарегистрирован в IIO: проверьте модуль, оверлей и перезагрузку", 409
+                )
             try:
                 temperature = int((device / "in_temp_input").read_text()) / 1000
                 humidity = int((device / "in_humidityrelative_input").read_text()) / 1000
                 if not (-40 <= temperature <= 80 and 0 <= humidity <= 100):
                     raise ValueError("значения вне диапазона DHT22")
-                self.sample = {"ok": True, "temperature": temperature, "humidity": humidity, "time": time.time()}
+                self.sample = {
+                    "ok": True,
+                    "temperature": temperature,
+                    "humidity": humidity,
+                    "time": time.time(),
+                }
             except (OSError, ValueError):
-                self.sample = {"ok": False, "error": "Нет корректного ответа DHT22: проверьте 3.3 В, DATA, GND и подтяжку. См. журнал ядра.", "time": time.time()}
+                self.sample = {
+                    "ok": False,
+                    "error": "Нет корректного ответа DHT22: проверьте 3.3 В, DATA, GND и подтяжку. См. журнал ядра.",
+                    "time": time.time(),
+                }
             self.sample_at = time.monotonic()
             return self.sample

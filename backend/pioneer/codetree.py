@@ -1,4 +1,5 @@
 """Папки с кодом: проверка путей, лимиты и безопасная миграция старых файлов."""
+
 from __future__ import annotations
 
 import hashlib
@@ -34,9 +35,15 @@ class CodeTree:
 
     def path(self, name: str, *, metadata: bool = False) -> Path:
         parts = PurePosixPath(name).parts
-        if (not name or name.startswith("/") or "\\" in name or "\0" in name or not parts
-                or any(p in ("", "..", ".") or p.startswith(".pioneer-") for p in name.split("/"))
-                or (not metadata and META in parts)):
+        if (
+            not name
+            or name.startswith("/")
+            or "\\" in name
+            or "\0" in name
+            or not parts
+            or any(p in ("", "..", ".") or p.startswith(".pioneer-") for p in name.split("/"))
+            or (not metadata and META in parts)
+        ):
             raise TreeError("недопустимый путь")
         p = self.root
         if p.is_symlink():
@@ -54,7 +61,10 @@ class CodeTree:
 
     def set_meta(self, meta: dict) -> None:
         with self.lock:
-            self._write(self.path(META, metadata=True), json.dumps(meta, ensure_ascii=False, indent=2).encode())
+            self._write(
+                self.path(META, metadata=True),
+                json.dumps(meta, ensure_ascii=False, indent=2).encode(),
+            )
 
     @staticmethod
     def _write(path: Path, data: bytes) -> None:
@@ -72,7 +82,9 @@ class CodeTree:
     def files(self, *, hashes: bool = True) -> list[dict]:
         out = []
         for parent, dirs, files in os.walk(self.root, followlinks=False):
-            dirs[:] = sorted(d for d in dirs if d != "__pycache__" and not d.startswith(".pioneer-"))
+            dirs[:] = sorted(
+                d for d in dirs if d != "__pycache__" and not d.startswith(".pioneer-")
+            )
             for name in sorted(dirs + files):
                 if name == META or name.startswith(".pioneer-"):
                     continue
@@ -108,8 +120,13 @@ class CodeTree:
             if len(data) > FILE_LIMIT:
                 raise TreeError("файл больше 5 МБ")
             entries = self.files(hashes=False)
-            total = sum(e.get("size", 0) for e in entries if not e.get("oversized")) - (p.stat().st_size if p.is_file() and p.stat().st_size <= FILE_LIMIT else 0)
-            if total + len(data) > TREE_LIMIT or len(entries) + len(PurePosixPath(name).parts) > MAX_ENTRIES:
+            total = sum(e.get("size", 0) for e in entries if not e.get("oversized")) - (
+                p.stat().st_size if p.is_file() and p.stat().st_size <= FILE_LIMIT else 0
+            )
+            if (
+                total + len(data) > TREE_LIMIT
+                or len(entries) + len(PurePosixPath(name).parts) > MAX_ENTRIES
+            ):
                 raise TreeError("превышен лимит проекта (50 МБ / 2000 файлов и папок)")
             self._write(p, data)
             self._invalidate(p)
@@ -154,8 +171,13 @@ class CodeTree:
         with self.lock, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr(META, json.dumps(self.meta(), ensure_ascii=False))
             entries = self.files(hashes=False)
-            if any(e.get("oversized") for e in entries) or sum(e.get("size", 0) for e in entries) > TREE_LIMIT:
-                raise TreeError("данные превышают лимиты экспорта; перенесите большие файлы отдельно")
+            if (
+                any(e.get("oversized") for e in entries)
+                or sum(e.get("size", 0) for e in entries) > TREE_LIMIT
+            ):
+                raise TreeError(
+                    "данные превышают лимиты экспорта; перенесите большие файлы отдельно"
+                )
             for e in entries:
                 if e["kind"] == "dir":
                     z.writestr(e["path"] + "/", b"")
@@ -172,7 +194,12 @@ class CodeTree:
         with self.lock, tempfile.TemporaryDirectory(prefix=".pioneer-", dir=self.root.parent) as d:
             copy = CodeTree(Path(d) / "tree")
             self.files(hashes=False)  # запрещаем симлинки до copytree
-            shutil.copytree(self.root, copy.root, copy_function=os.link, ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copytree(
+                self.root,
+                copy.root,
+                copy_function=os.link,
+                ignore=shutil.ignore_patterns("__pycache__"),
+            )
             staged: dict[str, bool] = {}
             try:
                 with zipfile.ZipFile(io.BytesIO(data) if isinstance(data, bytes) else data) as z:
@@ -193,7 +220,9 @@ class CodeTree:
                         if total > TREE_LIMIT:
                             raise TreeError("архив больше 50 МБ после распаковки")
                         staged[name] = info.is_dir()
-                        copy.path(name).mkdir(parents=True, exist_ok=True) if info.is_dir() else copy._write(copy.path(name), z.read(info))
+                        copy.path(name).mkdir(
+                            parents=True, exist_ok=True
+                        ) if info.is_dir() else copy._write(copy.path(name), z.read(info))
             except (zipfile.BadZipFile, RuntimeError) as e:
                 raise TreeError("повреждённый или зашифрованный ZIP") from e
             entries = copy.files(hashes=False)
@@ -208,7 +237,9 @@ class CodeTree:
 
 
 def project_tree(data_dir: Path, kind: str, ident: str) -> CodeTree:
-    if kind not in ("scripts", "blocks", "lib") or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,63}|[a-z0-9]{6,32}", ident):
+    if kind not in ("scripts", "blocks", "lib") or not re.fullmatch(
+        r"[a-zA-Z_][a-zA-Z0-9_]{0,63}|[a-z0-9]{6,32}", ident
+    ):
         raise TreeError("недопустимый тип или id проекта")
     base = data_dir / kind
     if base.is_symlink():

@@ -1,4 +1,5 @@
 """Общее файловое API для скриптов, блоков и библиотек (idea 005)."""
+
 from __future__ import annotations
 
 import time
@@ -19,6 +20,7 @@ def access(request: Request) -> None:
         # Отдельный ключ: доступ к коду не наследуется от ключа команд железа.
         import hmac
         from pioneer.engine.node import NodeError
+
         try:
             expected = request.app.state.secrets.resolve("{{secret:code_api_key}}")
         except NodeError:
@@ -66,7 +68,10 @@ def changed(request: Request, kind: str, ident: str, t: CodeTree) -> dict:
 @router.get("/lib")
 def libraries(request: Request) -> list[dict]:
     base = request.app.state.cfg.data_dir / "lib"
-    return [{"id": p.parent.name, **CodeTree(p.parent).meta()} for p in sorted(base.glob("*/pioneer.json"))]
+    return [
+        {"id": p.parent.name, **CodeTree(p.parent).meta()}
+        for p in sorted(base.glob("*/pioneer.json"))
+    ]
 
 
 class Library(BaseModel):
@@ -130,6 +135,7 @@ async def upload(kind: str, ident: str, path: str, request: Request) -> dict:
 def download(kind: str, ident: str, path: str, request: Request) -> Response:
     data = guard(tree(request, kind, ident).read, path)
     import mimetypes
+
     media = mimetypes.guess_type(path)[0] or "application/octet-stream"
     # SVG/HTML никогда не исполняются в origin приложения.
     if media not in ("image/png", "image/jpeg", "image/webp", "image/gif"):
@@ -169,8 +175,12 @@ def export(kind: str, ident: str, request: Request) -> FileResponse:
     except BaseException:
         path.unlink(missing_ok=True)
         raise
-    return FileResponse(path, media_type="application/zip", filename="project.zip",
-                        background=BackgroundTask(path.unlink, missing_ok=True))
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename="project.zip",
+        background=BackgroundTask(path.unlink, missing_ok=True),
+    )
 
 
 @router.post("/{kind}/{ident}/import.zip")
@@ -200,9 +210,14 @@ class Metadata(BaseModel):
 def metadata(kind: str, ident: str, body: Metadata, request: Request) -> dict:
     from dataclasses import asdict
     from pioneer.api.scripts import _guard
+
     t = tree(request, kind, ident)
     if kind == "scripts":
-        return _guard(lambda: asdict(request.app.state.scripts.update(ident, **body.model_dump(exclude_none=True))))
+        return _guard(
+            lambda: asdict(
+                request.app.state.scripts.update(ident, **body.model_dump(exclude_none=True))
+            )
+        )
     if body.entry is not None or body.autostart is not None or body.restart_on_save is not None:
         raise HTTPException(400, "настройки запуска доступны только скриптам")
     if kind == "blocks":
@@ -219,6 +234,7 @@ def metadata(kind: str, ident: str, body: Metadata, request: Request) -> dict:
 def run(kind: str, ident: str, request: Request) -> dict:
     from dataclasses import asdict
     from pioneer.api.scripts import _guard
+
     tree(request, kind, ident)
     if kind != "scripts":
         raise HTTPException(400, "запускаются только скрипты")
@@ -227,27 +243,36 @@ def run(kind: str, ident: str, request: Request) -> dict:
 
 @router.delete("/{kind}/{ident}/dependencies")
 @router.post("/{kind}/{ident}/dependencies")
-def dependencies(kind:str, ident:str, request:Request, confirmed:bool=False):
+def dependencies(kind: str, ident: str, request: Request, confirmed: bool = False):
     from pioneer.dependencies import install, remove
-    t=tree(request,kind,ident)
-    if kind=="lib":raise HTTPException(422,"зависимости устанавливаются в скрипт или пакет блока")
-    if kind=="scripts" and request.app.state.scripts.status(ident).state=="running":
-        raise HTTPException(409,"сначала остановите скрипт")
-    if kind=="blocks" and request.app.state.projects.engine.runtimes:
-        raise HTTPException(409,"для установки зависимостей блока сначала остановите проекты")
+
+    t = tree(request, kind, ident)
+    if kind == "lib":
+        raise HTTPException(422, "зависимости устанавливаются в скрипт или пакет блока")
+    if kind == "scripts" and request.app.state.scripts.status(ident).state == "running":
+        raise HTTPException(409, "сначала остановите скрипт")
+    if kind == "blocks" and request.app.state.projects.engine.runtimes:
+        raise HTTPException(409, "для установки зависимостей блока сначала остановите проекты")
     if request.method == "DELETE":
         return guard(remove, t.root)
-    try:return install(t.root,confirmed)
-    except (OSError,TreeError):raise HTTPException(422,"проверьте requirements.txt и подтверждение установки колёс") from None
+    try:
+        return install(t.root, confirmed)
+    except (OSError, TreeError):
+        raise HTTPException(
+            422, "проверьте requirements.txt и подтверждение установки колёс"
+        ) from None
+
 
 async def upload_to(request: Request, path: Path, limit: int):
     """Bound uploaded archives on disk rather than retaining two full body copies in RAM."""
-    import asyncio,os
-    size=0
-    with path.open('xb') as file:
-        os.chmod(path,0o600)
+    import asyncio, os
+
+    size = 0
+    with path.open("xb") as file:
+        os.chmod(path, 0o600)
         async for chunk in request.stream():
-            size+=len(chunk)
-            if size>limit:raise HTTPException(413,'превышен лимит загрузки')
-            await asyncio.to_thread(file.write,chunk)
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, "превышен лимит загрузки")
+            await asyncio.to_thread(file.write, chunk)
     return path

@@ -1,4 +1,5 @@
 """Session/CSRF-protected AI settings and streaming project conversations."""
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -20,7 +21,9 @@ def save_settings(body: dict, request: Request):
         return request.app.state.ai.save_settings(body)
     except ValueError:
         # Validation errors may contain the submitted API key. Never echo request data.
-        raise HTTPException(422, "неверные настройки AI: проверьте провайдера, URL, effort и лимиты") from None
+        raise HTTPException(
+            422, "неверные настройки AI: проверьте провайдера, URL, effort и лимиты"
+        ) from None
 
 
 @router.get("/chats/{pid}")
@@ -30,7 +33,9 @@ def history(pid: str, request: Request):
     except ProjectError as e:
         raise HTTPException(e.code, str(e)) from None
     except ValueError:
-        raise HTTPException(422, "история повреждена или слишком большая — начните новый чат") from None
+        raise HTTPException(
+            422, "история повреждена или слишком большая — начните новый чат"
+        ) from None
 
 
 @router.delete("/chats/{pid}")
@@ -80,6 +85,7 @@ def decision(pid: str, aid: str, body: Decision, request: Request):
     # Small bounded transcript; use the same private atomic JSONL writer.
     import os
     import json
+
     tmp = path.with_suffix(".tmp")
     fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
@@ -95,12 +101,16 @@ async def chat(pid: str, request: Request):
     from pioneer.api.code import limited_body
     from pydantic import ValidationError
     from pioneer.ai.attachments import validate
+
     ai = request.app.state.ai
     try:
         body = Message.model_validate(json.loads(await limited_body(request, 1500 * 1024)))
         attachments = validate(body.attachments, ai.redact)
     except (ValueError, KeyError, TypeError, ValidationError):
-        raise HTTPException(422, "проверьте модель и вложения: до 4 файлов, текст до 64 КиБ, изображения до 256 КиБ/4 Мп") from None
+        raise HTTPException(
+            422,
+            "проверьте модель и вложения: до 4 файлов, текст до 64 КиБ, изображения до 256 КиБ/4 Мп",
+        ) from None
     ai = request.app.state.ai
     try:
         settings, key = await ai.begin(request.app, pid)
@@ -113,10 +123,14 @@ async def chat(pid: str, request: Request):
     if body.model is not None:
         settings = settings.model_copy(update={"model": body.model.strip()})
         if not settings.model:
-            ai.active = None; ai.lock.release()
+            ai.active = None
+            ai.lock.release()
             raise HTTPException(422, "укажите модель")
-    return StreamingResponse(ai.chat(request.app, pid, body.text, settings, key, attachments), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        ai.chat(request.app, pid, body.text, settings, key, attachments),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 class FileEdit(BaseModel):
@@ -132,6 +146,7 @@ def accept_file(pid: str, aid: str, body: FileEdit, request: Request):
     import ast
     import hashlib
     from pioneer.codetree import TreeError
+
     ai = request.app.state.ai
     is_block = pid.startswith("block:")
     if not is_block and not pid.startswith("script:"):
@@ -140,7 +155,9 @@ def accept_file(pid: str, aid: str, body: FileEdit, request: Request):
         raise HTTPException(409, "дождитесь окончания ответа")
     try:
         records = ai.history(request.app, pid)
-        artifact = next((a for m in records for a in m.get("artifacts", []) if a["id"] == aid), None)
+        artifact = next(
+            (a for m in records for a in m.get("artifacts", []) if a["id"] == aid), None
+        )
         if not artifact or artifact.get("kind") != "file":
             raise HTTPException(404, "предложение файла не найдено")
         if artifact.get("status") != "pending":
@@ -152,11 +169,12 @@ def accept_file(pid: str, aid: str, body: FileEdit, request: Request):
         bm = request.app.state.blocks
         if is_block:
             from pioneer.codetree import project_tree
+
             t = project_tree(request.app.state.cfg.data_dir, "blocks", pid[6:])
         else:
             t = sm.tree(pid[7:])
         # BlockManager.save takes manager lock before CodeTree lock.
-        with (bm._lock if is_block else t.lock), t.lock:
+        with bm._lock if is_block else t.lock, t.lock:
             path = t.path(artifact["path"])
             original = t.read(artifact["path"]) if path.exists() else None
             digest = hashlib.sha256(original).hexdigest() if original is not None else None

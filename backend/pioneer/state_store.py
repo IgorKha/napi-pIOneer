@@ -1,4 +1,5 @@
 """Opt-in checkpoints for explicit built-in state, never timers/events/hardware handles."""
+
 import hashlib
 import json
 import os
@@ -9,7 +10,9 @@ from pioneer.engine.types import check_value
 
 
 def signature(n):
-    return hashlib.sha256(json.dumps([n.type, n.params, n.inputs], sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    return hashlib.sha256(
+        json.dumps([n.type, n.params, n.inputs], sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
 
 
 class StateStore:
@@ -38,8 +41,11 @@ class StateStore:
             if not isinstance(values, dict):
                 continue
             try:
-                out[nid] = {k: check_value(v, nt.outputs[k].type) for k, v in values.items()
-                            if k in nt.cls.persistent_outputs and k in nt.outputs}
+                out[nid] = {
+                    k: check_value(v, nt.outputs[k].type)
+                    for k, v in values.items()
+                    if k in nt.cls.persistent_outputs and k in nt.outputs
+                }
             except (ValueError, TypeError):
                 continue
         return out
@@ -48,7 +54,11 @@ class StateStore:
     def snapshot(rt):
         records = {}
         for nid, node in rt.nodes.items():
-            values = {k: rt.sample(nid, k).value for k in node.persistent_outputs if rt.sample(nid, k) is not None}
+            values = {
+                k: rt.sample(nid, k).value
+                for k in node.persistent_outputs
+                if rt.sample(nid, k) is not None
+            }
             if values:
                 records[nid] = {"signature": signature(rt.graph.nodes[nid]), "values": values}
         return records

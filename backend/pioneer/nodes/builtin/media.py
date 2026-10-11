@@ -1,4 +1,5 @@
 """Универсальные изображения; ESP32-CAM и MJPEG вынесены в отдельную задачу."""
+
 import urllib.request
 
 from pioneer.engine.node import In, Node, NodeError, Out, Param, node
@@ -8,7 +9,12 @@ from pioneer.nodes.builtin.net import read_body
 CAT, COLOR = "Изображения", "#745da0"
 
 
-@node("builtin.image_url", title="Изображение по URL", category=CAT, color=COLOR, doc="""
+@node(
+    "builtin.image_url",
+    title="Изображение по URL",
+    category=CAT,
+    color=COLOR,
+    doc="""
 По событию «Получить» скачивает PNG/JPEG с обычного HTTP(S) URL и выдаёт Image.
 Подходит для тестового сервера или любого endpoint со снимком; поток MJPEG не читает.
 URL поддерживает {{secret:имя}}. Максимум 2 МБ, один запрос одновременно, таймаут
@@ -17,9 +23,12 @@ URL поддерживает {{secret:имя}}. Максимум 2 МБ, оди�
 При ошибке прежнее изображение очищается, событие «Готово» не выдаётся.
 
 Пример: Кнопка (пульт) → Получить; Изображение и Готово → HTTP: обработка.
-""")
+""",
+)
 class ImageUrl(Node):
-    url = Param("str", "", title="URL", required=True, doc="http(s)://…/image.png; можно {{secret:имя}}")
+    url = Param(
+        "str", "", title="URL", required=True, doc="http(s)://…/image.png; можно {{secret:имя}}"
+    )
     timeout_s = Param("float", 5.0, title="Таймаут", min=0.5, max=60, unit="с")
     fetch = In("Event", title="Получить")
     image = Out("Image", title="Изображение")
@@ -43,6 +52,7 @@ class ImageUrl(Node):
                 raw = read_body(r, MAX_IMAGE)
                 image_type(raw)
                 return raw
+
         self.run_async(work, self._done)
 
     def _done(self, raw, err):
@@ -50,20 +60,30 @@ class ImageUrl(Node):
         if err is not None:
             self.image.set(None)
             # URL может содержать секрет — не выводим исключение urllib целиком.
-            message = str(err) if isinstance(err, NodeError) else f"не удалось загрузить изображение ({type(err).__name__})"
+            message = (
+                str(err)
+                if isinstance(err, NodeError)
+                else f"не удалось загрузить изображение ({type(err).__name__})"
+            )
             self.failed.emit(message)
             raise NodeError(message)
         self.image.set(raw)
         self.ready.emit()
 
 
-@node("builtin.save_image", title="Сохранить изображение", category=CAT, color=COLOR, doc="""
+@node(
+    "builtin.save_image",
+    title="Сохранить изображение",
+    category=CAT,
+    color=COLOR,
+    doc="""
 По событию «Сохранить» записывает PNG/JPEG со входа Image в data/images/<проект>/.
 Имена уникальны, файлы не перезаписываются; максимум 100 снимков / 50 МБ на проект.
 При заполнении — ошибка, автоматического удаления нет. Очистка пока через SSH.
 «Файл» — относительный путь внутри data; «Готово» выдаётся после записи.
 Запись идёт в фоне, один файл одновременно. Снимки сохраняются после перезапуска.
-""")
+""",
+)
 class SaveImage(Node):
     save = In("Event", title="Сохранить")
     image = In("Image", title="Изображение")

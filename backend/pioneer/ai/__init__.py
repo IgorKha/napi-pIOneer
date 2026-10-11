@@ -1,4 +1,5 @@
 """Project-scoped assistant: bounded history/tool loop, drafts and validated proposals only."""
+
 from __future__ import annotations
 
 import asyncio
@@ -36,10 +37,18 @@ class AISettings(BaseModel):
 
 def safe_endpoint(url, required=False):
     from urllib.parse import urlsplit
+
     p = urlsplit(url)
     if not url and not required:
         return
-    if p.scheme not in ("http", "https") or not p.hostname or p.username or p.password or p.query or p.fragment:
+    if (
+        p.scheme not in ("http", "https")
+        or not p.hostname
+        or p.username
+        or p.password
+        or p.query
+        or p.fragment
+    ):
         raise ValueError("URL должен быть HTTP(S), без пароля, query и fragment")
 
 
@@ -109,8 +118,11 @@ class AIManager:
         return self.public_settings()
 
     def public_settings(self):
-        return {"settings": self.settings().model_dump(), "configured": self.settings().key_secret in self.secrets.names(),
-                "busy": self.lock.locked()}
+        return {
+            "settings": self.settings().model_dump(),
+            "configured": self.settings().key_secret in self.secrets.names(),
+            "busy": self.lock.locked(),
+        }
 
     @staticmethod
     def _write(path, data):
@@ -125,6 +137,7 @@ class AIManager:
             from pioneer.scripts import ScriptError
             from pioneer.codetree import TreeError
             from pioneer.projects import ProjectError
+
             try:
                 app.state.scripts.meta(pid[7:])
             except (ScriptError, TreeError) as e:
@@ -133,6 +146,7 @@ class AIManager:
             from pioneer.userblocks import BlockError
             from pioneer.codetree import TreeError
             from pioneer.projects import ProjectError
+
             try:
                 app.state.blocks.get(pid[6:])
             except (BlockError, TreeError) as e:
@@ -148,7 +162,9 @@ class AIManager:
         # Our files are bounded to 2 MB; never feed a whole unbounded transcript to the model.
         if path.stat().st_size > 2 * 1024 * 1024:
             raise ValueError("история больше 2 МБ — начните новый чат")
-        return self.redact([json.loads(line) for line in path.read_text().splitlines() if line][-100:])
+        return self.redact(
+            [json.loads(line) for line in path.read_text().splitlines() if line][-100:]
+        )
 
     def append(self, app, pid, record):
         path = self.path(app, pid)
@@ -165,6 +181,7 @@ class AIManager:
 
     def redact(self, data):
         values = [s for s in self.secrets._load().values() if s]
+
         def clean(v):
             if isinstance(v, str):
                 for secret in sorted(values, key=len, reverse=True):
@@ -175,19 +192,39 @@ class AIManager:
             if isinstance(v, dict):
                 return {k: clean(x) for k, x in v.items()}
             return v
+
         return clean(data)
 
     def knowledge(self, app):
         board = app.state.board
-        pins = [{"id": p.id, "kind": p.kind, "gpio": p.name, "pull": p.default_pull,
-                 "drive_ma": p.drive_ma, "alt": list(p.alt)} for p in board.pins.values()]
-        catalog = [{"type": s["type"], "title": s["title"]} for s in app.state.projects.registry.schemas()]
+        pins = [
+            {
+                "id": p.id,
+                "kind": p.kind,
+                "gpio": p.name,
+                "pull": p.default_pull,
+                "drive_ma": p.drive_ma,
+                "alt": list(p.alt),
+            }
+            for p in board.pins.values()
+        ]
+        catalog = [
+            {"type": s["type"], "title": s["title"]} for s in app.state.projects.registry.schemas()
+        ]
         hardware_doc = REPO_ROOT / "docs" / "sdk" / "hardware.md"
         extra = hardware_doc.read_text()[:12000] if hardware_doc.exists() else ""
         blocks_doc = REPO_ROOT / "docs" / "sdk" / "blocks.md"
         if blocks_doc.exists():
             extra += "\nSDK блоков:\n" + blocks_doc.read_text()[:10000]
-        return SYSTEM + "\nРаспиновка: " + json.dumps(pins, ensure_ascii=False) + "\nКаталог: " + json.dumps(catalog, ensure_ascii=False) + "\n" + extra
+        return (
+            SYSTEM
+            + "\nРаспиновка: "
+            + json.dumps(pins, ensure_ascii=False)
+            + "\nКаталог: "
+            + json.dumps(catalog, ensure_ascii=False)
+            + "\n"
+            + extra
+        )
 
     async def begin(self, app, pid):
         self.path(app, pid)
@@ -202,18 +239,55 @@ class AIManager:
 
     async def chat(self, app, pid, text, settings, key, attachments=None):
         from pioneer.ai.tools import Tools
+
         provider = None
-        message = {"id": secrets.token_hex(8), "role": "assistant", "text": "", "t": time.time(),
-                   "artifacts": [], "citations": [], "usage": {"input": 0, "output": 0, "cached": 0}}
+        message = {
+            "id": secrets.token_hex(8),
+            "role": "assistant",
+            "text": "",
+            "t": time.time(),
+            "artifacts": [],
+            "citations": [],
+            "usage": {"input": 0, "output": 0, "cached": 0},
+        }
+
         def event(kind, **data):
-            return "data: " + json.dumps(self.redact({"type": kind, **data}), ensure_ascii=False) + "\n\n"
+            return (
+                "data: "
+                + json.dumps(self.redact({"type": kind, **data}), ensure_ascii=False)
+                + "\n\n"
+            )
+
         try:
             history = self.history(app, pid)
             text = self.redact(text)
-            messages = [{"role": m["role"], "content": m["text"][:12000]} for m in history[-20:] if m.get("role") in ("user", "assistant") and m.get("text")]
+            messages = [
+                {"role": m["role"], "content": m["text"][:12000]}
+                for m in history[-20:]
+                if m.get("role") in ("user", "assistant") and m.get("text")
+            ]
             from pioneer.ai.attachments import message as user_message
-            messages.append({"role": "user", "content": user_message(text, attachments or [], settings.provider)})
-            self.append(app, pid, {"id": secrets.token_hex(8), "role": "user", "text": text, "model": settings.model, "attachments": [{"name": a["name"], "type": a["type"]} for a in attachments or []], "t": time.time()})
+
+            messages.append(
+                {
+                    "role": "user",
+                    "content": user_message(text, attachments or [], settings.provider),
+                }
+            )
+            self.append(
+                app,
+                pid,
+                {
+                    "id": secrets.token_hex(8),
+                    "role": "user",
+                    "text": text,
+                    "model": settings.model,
+                    "attachments": [
+                        {"name": a["name"], "type": a["type"]} for a in attachments or []
+                    ],
+                    "t": time.time(),
+                },
+            )
             yield event("start", id=message["id"])
             provider = self.provider_factory(settings, key)
             tools = Tools(app, pid, self.redact, settings)
@@ -232,7 +306,9 @@ class AIManager:
                 for _ in range(10):
                     remaining = settings.max_tokens - message["usage"]["output"]
                     if remaining < 256:
-                        raise ValueError("достигнут лимит токенов — продолжите отдельным сообщением")
+                        raise ValueError(
+                            "достигнут лимит токенов — продолжите отдельным сообщением"
+                        )
                     result = None
                     async for part in provider.stream(messages, system, tools.schemas(), remaining):
                         if "delta" in part:
@@ -253,7 +329,9 @@ class AIManager:
                     messages.extend(result["result"])
                     calls = result.get("calls", [])
                     if result.get("incomplete"):
-                        raise ValueError("ответ достиг лимита токенов; уже проверенные предложения доступны")
+                        raise ValueError(
+                            "ответ достиг лимита токенов; уже проверенные предложения доступны"
+                        )
                     if not calls:
                         break
                     outputs = []
@@ -267,9 +345,17 @@ class AIManager:
                                 raise ValueError("аргументы инструмента слишком большие")
                             output = await tools.call(call["name"], json.loads(call["arguments"]))
                         except Exception as e:
-                            output = {"error": self.redact(str(e))[:1000] if isinstance(e, (ValueError, KeyError)) else type(e).__name__}
+                            output = {
+                                "error": self.redact(str(e))[:1000]
+                                if isinstance(e, (ValueError, KeyError))
+                                else type(e).__name__
+                            }
                         encoded = json.dumps(output, ensure_ascii=False)
-                        outputs.append(encoded if len(encoded) < 90000 else json.dumps({"error": "результат слишком большой"}))
+                        outputs.append(
+                            encoded
+                            if len(encoded) < 90000
+                            else json.dumps({"error": "результат слишком большой"})
+                        )
                         for artifact in tools.events:
                             artifact.update(id=secrets.token_hex(8), status="pending")
                             message["artifacts"].append(artifact)
@@ -284,11 +370,17 @@ class AIManager:
             raise
         except Exception as e:
             status = getattr(e, "status_code", None)
-            error = (str(e) if isinstance(e, ValueError) else
-                     "ключ отклонён провайдером" if status in (401, 403) else
-                     "лимит/квота провайдера (429)" if status == 429 else
-                     f"ошибка провайдера HTTP {status}" if status else
-                     "AI недоступен: проверьте интернет, модель и настройки провайдера")
+            error = (
+                str(e)
+                if isinstance(e, ValueError)
+                else "ключ отклонён провайдером"
+                if status in (401, 403)
+                else "лимит/квота провайдера (429)"
+                if status == 429
+                else f"ошибка провайдера HTTP {status}"
+                if status
+                else "AI недоступен: проверьте интернет, модель и настройки провайдера"
+            )
             message["error"] = self.redact(error)
             yield event("error", error=message["error"])
         finally:

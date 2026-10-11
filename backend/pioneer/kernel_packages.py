@@ -1,4 +1,5 @@
 """Install trusted kernel driver packages without adding device-specific core code."""
+
 from __future__ import annotations
 
 import difflib
@@ -55,7 +56,9 @@ class KernelPackages:
         except FileNotFoundError:
             return []
         names = data.get("autoload") if isinstance(data, dict) else None
-        if not isinstance(names, list) or any(not isinstance(n, str) or not IDENTIFIER.fullmatch(n) for n in names):
+        if not isinstance(names, list) or any(
+            not isinstance(n, str) or not IDENTIFIER.fullmatch(n) for n in names
+        ):
             raise DriverError("неверная конфигурация автозагрузки пакетов")
         return names
 
@@ -81,26 +84,43 @@ class KernelPackages:
         result = []
         for file in sorted(self.root.glob("*/manifest.json")):
             m = self.meta(file.parent.name)
-            result.append({**m, "autoload": m["id"] in enabled,
-                           "loaded": all(self.loaded(x["name"]) for x in m["modules"]),
-                           "modules": [{**x, "loaded": self.loaded(x["name"])} for x in m["modules"]]})
-        return {"kernel": self.drivers.release, "real": self.hw.hal.name == "linux", "packages": result}
+            result.append(
+                {
+                    **m,
+                    "autoload": m["id"] in enabled,
+                    "loaded": all(self.loaded(x["name"]) for x in m["modules"]),
+                    "modules": [{**x, "loaded": self.loaded(x["name"])} for x in m["modules"]],
+                }
+            )
+        return {
+            "kernel": self.drivers.release,
+            "real": self.hw.hal.name == "linux",
+            "packages": result,
+        }
 
     def validate_module(self, file):
         data = file.read_bytes()
-        if (len(data) < 64 or len(data) > UPLOAD_LIMIT or data[:6] != b"\x7fELF\x02\x01"
-                or struct.unpack_from("<HH", data, 16) != (1, 183)):
+        if (
+            len(data) < 64
+            or len(data) > UPLOAD_LIMIT
+            or data[:6] != b"\x7fELF\x02\x01"
+            or struct.unpack_from("<HH", data, 16) != (1, 183)
+        ):
             raise DriverError("нужен несжатый ELF-модуль ARM64 (.ko) до 16 МиБ")
         command = self.drivers.command
         name = self.identifier(command(["modinfo", "-F", "name", str(file)]))
         vermagic = command(["modinfo", "-F", "vermagic", str(file)])
         if vermagic != self.drivers.expected_vermagic():
             raise DriverError("модуль не соответствует текущему ядру/ABI: " + self.drivers.release)
-        return {"file": file.name, "name": name, "vermagic": vermagic,
-                "description": command(["modinfo", "-F", "description", str(file)]),
-                "license": command(["modinfo", "-F", "license", str(file)]),
-                "depends": command(["modinfo", "-F", "depends", str(file)]),
-                "sha256": hashlib.sha256(data).hexdigest()}
+        return {
+            "file": file.name,
+            "name": name,
+            "vermagic": vermagic,
+            "description": command(["modinfo", "-F", "description", str(file)]),
+            "license": command(["modinfo", "-F", "license", str(file)]),
+            "depends": command(["modinfo", "-F", "depends", str(file)]),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
 
     def install(self, data):
         self.drivers.real()
@@ -119,10 +139,16 @@ class KernelPackages:
                         if len(set(names)) != len(names):
                             raise DriverError("повторяющиеся файлы в пакете")
                         for f in files:
-                            if (not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", f.filename) or f.filename in (".", "..")
-                                    or f.is_dir() or f.flag_bits & 1
-                                    or (f.external_attr >> 16) & 0o170000 == 0o120000):
-                                raise DriverError("пакет должен содержать обычные файлы без каталогов и ссылок")
+                            if (
+                                not re.fullmatch(r"[a-zA-Z0-9_.-]{1,100}", f.filename)
+                                or f.filename in (".", "..")
+                                or f.is_dir()
+                                or f.flag_bits & 1
+                                or (f.external_attr >> 16) & 0o170000 == 0o120000
+                            ):
+                                raise DriverError(
+                                    "пакет должен содержать обычные файлы без каталогов и ссылок"
+                                )
                             CodeTree._write(stage / f.filename, archive.read(f))
                     manifest_file = stage / "manifest.json"
                     if not manifest_file.exists() or manifest_file.stat().st_size > 65536:
@@ -154,19 +180,36 @@ class KernelPackages:
                 if p["id"] != ident and any(m["name"] in module_names for m in p["modules"]):
                     raise DriverError("модуль уже принадлежит другому пакету", 409)
             if any(self.loaded(n) for n in module_names):
-                raise DriverError("модуль уже загружен; остановите потребителей и выгрузите его перед установкой", 409)
+                raise DriverError(
+                    "модуль уже загружен; остановите потребителей и выгрузите его перед установкой",
+                    409,
+                )
             pins = raw.get("pins", [])
-            if not isinstance(pins, list) or any(not isinstance(p, str) or p not in self.drivers.board.pins or not self.drivers.board.pins[p].gpio for p in pins):
+            if not isinstance(pins, list) or any(
+                not isinstance(p, str)
+                or p not in self.drivers.board.pins
+                or not self.drivers.board.pins[p].gpio
+                for p in pins
+            ):
                 raise DriverError("pins: список GPIO-пинов J9/J10, которые занимает оверлей")
             nodes = raw.get("device_nodes", [])
-            if not isinstance(nodes, list) or any(not isinstance(n, str) or not re.fullmatch(r"/[a-zA-Z0-9_@,./-]+", n) or ".." in n for n in nodes):
+            if not isinstance(nodes, list) or any(
+                not isinstance(n, str) or not re.fullmatch(r"/[a-zA-Z0-9_@,./-]+", n) or ".." in n
+                for n in nodes
+            ):
                 raise DriverError("device_nodes: абсолютные пути устройств в Device Tree")
             overlay = raw.get("overlay")
             if overlay is not None:
-                if not isinstance(overlay, str) or not re.fullmatch(r"[a-zA-Z0-9_.-]+\.dtbo", overlay):
+                if not isinstance(overlay, str) or not re.fullmatch(
+                    r"[a-zA-Z0-9_.-]+\.dtbo", overlay
+                ):
                     raise DriverError("неверное имя .dtbo")
                 blob = (stage / overlay).read_bytes()
-                if len(blob) < 40 or len(blob) > 256 * 1024 or struct.unpack_from(">II", blob) != (0xd00dfeed, len(blob)):
+                if (
+                    len(blob) < 40
+                    or len(blob) > 256 * 1024
+                    or struct.unpack_from(">II", blob) != (0xD00DFEED, len(blob))
+                ):
                     raise DriverError("неверный DTBO")
             allowed = set(modules) | {"manifest.json"} | ({overlay} if overlay else set())
             if any(p.name not in allowed for p in stage.iterdir()):
@@ -175,11 +218,25 @@ class KernelPackages:
             if not isinstance(params, dict) or any(k not in module_names for k in params):
                 raise DriverError("parameters: параметры по именам модулей")
             for values in params.values():
-                if not isinstance(values, list) or any(not isinstance(v, str) or len(v) > 256 or not re.fullmatch(r"[a-zA-Z0-9_]+=[a-zA-Z0-9_.,:/+-]*", v) for v in values):
+                if not isinstance(values, list) or any(
+                    not isinstance(v, str)
+                    or len(v) > 256
+                    or not re.fullmatch(r"[a-zA-Z0-9_]+=[a-zA-Z0-9_.,:/+-]*", v)
+                    for v in values
+                ):
                     raise DriverError("параметры должны быть списком key=value")
-            manifest = {"id": ident, "title": title, "modules": metadata, "overlay": overlay,
-                        "pins": list(dict.fromkeys(pins)), "device_nodes": nodes, "parameters": params}
-            CodeTree._write(stage / "manifest.json", json.dumps(manifest, ensure_ascii=False).encode())
+            manifest = {
+                "id": ident,
+                "title": title,
+                "modules": metadata,
+                "overlay": overlay,
+                "pins": list(dict.fromkeys(pins)),
+                "device_nodes": nodes,
+                "parameters": params,
+            }
+            CodeTree._write(
+                stage / "manifest.json", json.dumps(manifest, ensure_ascii=False).encode()
+            )
             dest = self.path(ident)
             if dest.exists() and any(self.loaded(x["name"]) for x in self.meta(ident)["modules"]):
                 raise DriverError("предыдущая версия пакета ещё загружена", 409)
@@ -212,7 +269,9 @@ class KernelPackages:
                         self.identifier(dep)
                         if not self.loaded(dep):
                             self.drivers.command(["modprobe", dep])
-                    self.drivers.command(["insmod", str(file), *m["parameters"].get(item["name"], [])])
+                    self.drivers.command(
+                        ["insmod", str(file), *m["parameters"].get(item["name"], [])]
+                    )
                     if not self.loaded(item["name"]):
                         raise DriverError("модуль не появился в /sys/module")
                     started.append(item["name"])
@@ -274,7 +333,11 @@ class KernelPackages:
         if enabled:
             names.append(overlay_name)
         line = "user_overlays=" + " ".join(names)
-        updated = re.sub(r"^user_overlays=.*$", line, text, flags=re.M) if match else text + ("" if text.endswith("\n") else "\n") + line + "\n"
+        updated = (
+            re.sub(r"^user_overlays=.*$", line, text, flags=re.M)
+            if match
+            else text + ("" if text.endswith("\n") else "\n") + line + "\n"
+        )
         blob = (self.path(ident) / m["overlay"]).read_bytes()
         blockers = []
         if self.hw.hal.name != "linux":
@@ -295,23 +358,64 @@ class KernelPackages:
                 supplied = Path(tmp) / "supplied.dtbo"
                 supplied.write_bytes(blob)
                 source = self.drivers.command(["dtc", "-I", "dtb", "-O", "dts", str(supplied)])
-                values = dict(l.split("=", 1) for l in updated.splitlines() if "=" in l and not l.startswith("#"))
+                values = dict(
+                    l.split("=", 1)
+                    for l in updated.splitlines()
+                    if "=" in l and not l.startswith("#")
+                )
                 fdtfile = values.get("fdtfile", "")
                 if not re.fullmatch(r"[a-zA-Z0-9_.-]+\.dtb", fdtfile):
                     raise DriverError("неверный fdtfile")
                 chain = []
-                for key, directory in (("overlays", self.cfg.overlays_dir), ("user_overlays", self.cfg.user_overlays_dir)):
+                for key, directory in (
+                    ("overlays", self.cfg.overlays_dir),
+                    ("user_overlays", self.cfg.user_overlays_dir),
+                ):
                     for name in values.get(key, "").split():
                         self.identifier(name)
-                        chain.append(supplied if name == overlay_name and key == "user_overlays" else directory / (name + ".dtbo"))
-                self.drivers.command(["fdtoverlay", "-i", str(self.cfg.uenv_file.parent / fdtfile), "-o", str(Path(tmp) / "validated.dtb"), *map(str, chain)])
+                        chain.append(
+                            supplied
+                            if name == overlay_name and key == "user_overlays"
+                            else directory / (name + ".dtbo")
+                        )
+                self.drivers.command(
+                    [
+                        "fdtoverlay",
+                        "-i",
+                        str(self.cfg.uenv_file.parent / fdtfile),
+                        "-o",
+                        str(Path(tmp) / "validated.dtb"),
+                        *map(str, chain),
+                    ]
+                )
                 compiled = True
-        digest = hashlib.sha256(text.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()).hexdigest()
-        return {"id": ident, "enabled": enabled, "hash": digest, "pins": m["pins"],
+        digest = hashlib.sha256(
+            text.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()
+        ).hexdigest()
+        return (
+            {
+                "id": ident,
+                "enabled": enabled,
+                "hash": digest,
+                "pins": m["pins"],
                 "source": source,
-                "ready": not blockers, "blockers": blockers, "compiled": compiled,
-                "diff": "".join(difflib.unified_diff(text.splitlines(True), updated.splitlines(True), fromfile="uEnv.txt", tofile="после применения")),
-                "needs_reboot": True}, updated, blob, overlay_name
+                "ready": not blockers,
+                "blockers": blockers,
+                "compiled": compiled,
+                "diff": "".join(
+                    difflib.unified_diff(
+                        text.splitlines(True),
+                        updated.splitlines(True),
+                        fromfile="uEnv.txt",
+                        tofile="после применения",
+                    )
+                ),
+                "needs_reboot": True,
+            },
+            updated,
+            blob,
+            overlay_name,
+        )
 
     def plan(self, ident, enabled):
         with self.drivers.overlays.lock, self.lock:
@@ -329,12 +433,16 @@ class KernelPackages:
             # Catch external uEnv changes after compilation.
             old = self.drivers.boot_text()
             m = self.meta(ident)
-            digest = hashlib.sha256(old.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()).hexdigest()
+            digest = hashlib.sha256(
+                old.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()
+            ).hexdigest()
             if digest != expected_hash:
                 raise DriverError("uEnv изменился — обновите предпросмотр", 409)
             dest = self.cfg.user_overlays_dir / (name + ".dtbo")
             files = {dest: blob} if enabled else {}
             try:
-                return self.drivers.overlays.uenv.commit(hashlib.sha256(old.encode()).hexdigest(), text, files)
+                return self.drivers.overlays.uenv.commit(
+                    hashlib.sha256(old.encode()).hexdigest(), text, files
+                )
             except UEnvError as e:
                 raise DriverError(str(e), 409) from e
