@@ -6,6 +6,7 @@ import os
 import re
 import time
 from pioneer.board import load_board,parse_uenv_overlays
+from pioneer.uenv import UEnvError
 from pioneer.codetree import CodeTree
 from pioneer.kernel_drivers import DriverError
 NAME='pioneer-gpio-bias'
@@ -55,7 +56,7 @@ class Pulls:
         digest=hashlib.sha256((text+json.dumps(old,sort_keys=True)+source).encode()).hexdigest()
         blob=None
         if not blockers and d.hw.hal.name=='linux':blob=d.compile(source,updated,NAME)
-        return {'hash':digest,'pin':pin,'bias':bias,'values':values,'source':source,'diff':''.join(difflib.unified_diff(text.splitlines(True),updated.splitlines(True))), 'blockers':blockers,'compiled':blob is not None,'needs_reboot':True},updated,blob
+        return {'hash':digest,'uenv_hash':hashlib.sha256(text.encode()).hexdigest(),'pin':pin,'bias':bias,'values':values,'source':source,'diff':''.join(difflib.unified_diff(text.splitlines(True),updated.splitlines(True))), 'blockers':blockers,'compiled':blob is not None,'needs_reboot':True},updated,blob
     def preview(self,pin,bias):return self._plan(pin,bias)[0]
     def apply(self,pin,bias,expected,confirmed):
         d=self.drivers;d.real()
@@ -67,23 +68,12 @@ class Pulls:
             with d.hw._lock,d.hw.res._lock:
                 if any(p in d.hw.res.claims for p in set(self.config())|set(plan['values'])):raise DriverError('пин занят',409)
                 if self._plan_hash(plan)!=expected:raise DriverError('uEnv изменился',409)
-                backup=d.root/('bias-backup-'+str(time.time_ns()));backup.mkdir(mode=0o700)
                 dest=d.cfg.user_overlays_dir/(NAME+'.dtbo')
-                targets=[d.cfg.uenv_file,self.file,dest]
-                for i,target in enumerate(targets):
-                    if target.exists():CodeTree._write(backup/str(i),target.read_bytes())
-                mode=d.cfg.uenv_file.stat().st_mode&0o777
+                files={self.file:json.dumps(plan['values']).encode()}
+                if plan['values']:files[dest]=blob
                 try:
-                    if plan['values']:CodeTree._write(dest,blob)
-                    CodeTree._write(self.file,json.dumps(plan['values']).encode());os.chmod(self.file,0o600)
-                    CodeTree._write(d.cfg.uenv_file,text.encode());os.chmod(d.cfg.uenv_file,mode)
-                except BaseException:
-                    for i,target in enumerate(targets):
-                        saved=backup/str(i)
-                        if saved.exists():CodeTree._write(target,saved.read_bytes())
-                        else:target.unlink(missing_ok=True)
-                    os.chmod(d.cfg.uenv_file,mode)
-                    raise
-                return {'changed':True,'needs_reboot':True,'backup':str(backup)}
+                    return d.overlays.uenv.commit(plan['uenv_hash'],text,files)
+                except UEnvError as e:
+                    raise DriverError(str(e),409) from e
     def _plan_hash(self,plan):
         return hashlib.sha256((self.drivers.boot_text()+json.dumps(self.config(),sort_keys=True)+plan['source']).encode()).hexdigest()

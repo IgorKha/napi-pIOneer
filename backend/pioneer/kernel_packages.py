@@ -15,6 +15,7 @@ import time
 import zipfile
 from pathlib import Path
 
+from pioneer.uenv import UEnvError
 from pioneer.codetree import CodeTree
 from pioneer.board import load_board, parse_uenv_overlays
 from pioneer.kernel_drivers import DriverError
@@ -313,12 +314,12 @@ class KernelPackages:
                 "needs_reboot": True}, updated, blob, overlay_name
 
     def plan(self, ident, enabled):
-        with self.lock, self.drivers.overlays.lock:
+        with self.drivers.overlays.lock, self.lock:
             return self._plan(ident, enabled)[0]
 
     def apply(self, ident, enabled, expected_hash):
         self.drivers.real()
-        with self.lock, self.drivers.overlays.lock:
+        with self.drivers.overlays.lock, self.lock:
             plan, text, blob, name = self._plan(ident, enabled)
             if plan["hash"] != expected_hash or not plan["ready"]:
                 raise DriverError("предпросмотр устарел или есть конфликты", 409)
@@ -331,24 +332,9 @@ class KernelPackages:
                 digest = hashlib.sha256(old.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()).hexdigest()
                 if digest != expected_hash:
                     raise DriverError("uEnv изменился — обновите предпросмотр", 409)
-                backup = self.root / ("backup-" + str(time.time_ns()))
-                backup.mkdir(mode=0o700)
                 dest = self.cfg.user_overlays_dir / (name + ".dtbo")
-                mode = self.cfg.uenv_file.stat().st_mode & 0o777
-                CodeTree._write(backup / "uEnv.txt", old.encode())
-                if dest.exists():
-                    CodeTree._write(backup / "overlay.dtbo", dest.read_bytes())
+                files = {dest: blob} if enabled else {}
                 try:
-                    if enabled:
-                        CodeTree._write(dest, blob)
-                    CodeTree._write(self.cfg.uenv_file, text.encode())
-                    os.chmod(self.cfg.uenv_file, mode)
-                except OSError:
-                    if (backup / "overlay.dtbo").exists():
-                        CodeTree._write(dest, (backup / "overlay.dtbo").read_bytes())
-                    elif enabled:
-                        dest.unlink(missing_ok=True)
-                    CodeTree._write(self.cfg.uenv_file, old.encode())
-                    os.chmod(self.cfg.uenv_file, mode)
-                    raise
-                return {"changed": True, "needs_reboot": True, "backup": str(backup)}
+                    return self.drivers.overlays.uenv.commit(hashlib.sha256(old.encode()).hexdigest(), text, files)
+                except UEnvError as e:
+                    raise DriverError(str(e), 409) from e

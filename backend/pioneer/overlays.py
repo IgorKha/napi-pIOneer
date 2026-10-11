@@ -8,6 +8,7 @@ import threading
 import time
 
 from pioneer.board import load_board, parse_uenv_overlays
+from pioneer.uenv import UEnv, UEnvError
 
 
 class OverlayError(ValueError):
@@ -19,7 +20,8 @@ class OverlayError(ValueError):
 class OverlayManager:
     def __init__(self, cfg, board, hw):
         self.cfg, self.board, self.hw = cfg, board, hw
-        self.lock = threading.Lock()
+        self.uenv = UEnv(cfg)
+        self.lock = self.uenv.lock
 
     def preview(self, enable, disable):
         path = self.cfg.uenv_file
@@ -62,23 +64,9 @@ class OverlayManager:
             if hashlib.sha256(text.encode()).hexdigest() != expected_hash:
                 raise OverlayError("uEnv изменился — обновите предпросмотр", 409)
             updated = re.sub(r"^overlays=.*$", "overlays=" + " ".join(plan["overlays"]), text, flags=re.M)
-            backup_dir = self.cfg.data_dir.parent / "backups"
-            backup_dir.mkdir(exist_ok=True)
-            backup = backup_dir / ("uEnv-" + str(time.time_ns()) + "-" + plan["hash"][:12] + ".txt")
-            fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "w") as f:
-                f.write(text)
-                f.flush()
-                os.fsync(f.fileno())
-            tmp = path.with_name(path.name + ".pioneer-tmp")
-            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, path.stat().st_mode & 0o777)
             try:
-                with os.fdopen(fd, "w") as f:
-                    f.write(updated)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp, path)
-            finally:
-                tmp.unlink(missing_ok=True)
+                result = self.uenv.commit(expected_hash, updated)
+            except UEnvError as e:
+                raise OverlayError(str(e), 409) from e
             self.board.overlays = plan["overlays"]  # live DT still reflects running kernel
-            return {"changed": True, "needs_reboot": True, "backup": str(backup)}
+            return result

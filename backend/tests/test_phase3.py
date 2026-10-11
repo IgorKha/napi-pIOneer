@@ -77,7 +77,7 @@ def test_overlay_transaction(tmp_path, board, hw):
         om.apply(['uart4'], [], plan['hash'])
     hw.release('busy', 'J10-5')
     result = om.apply(['uart4'], [], plan['hash'])
-    backup = Path(result['backup'])
+    backup = Path(result['backup']) / 'uEnv.txt'
     assert backup.read_text() == original and stat.S_IMODE(backup.stat().st_mode) == 0o600
     assert 'bootargs=keep\nuser_overlays=my-overlay\n' in path.read_text()
     assert 'rk3308-uart4' in path.read_text()

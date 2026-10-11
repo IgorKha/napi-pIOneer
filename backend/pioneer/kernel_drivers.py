@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 
 from pioneer.board import load_board, parse_uenv_overlays
+from pioneer.uenv import UEnvError
 from pioneer.codetree import CodeTree
 from pioneer.overlays import OverlayError
 
@@ -241,7 +242,7 @@ class KernelDrivers:
             blob = self.compile(source, updated)
             compiled = True
         digest = hashlib.sha256((text + source + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
-        return {"pin": pin, "enabled": enabled, "hash": digest, "source": source,
+        return {"pin": pin, "enabled": enabled, "hash": digest, "uenv_hash": hashlib.sha256(text.encode()).hexdigest(), "source": source,
                 "diff": "".join(difflib.unified_diff(text.splitlines(True), updated.splitlines(True), fromfile="uEnv.txt", tofile="после применения")),
                 "blockers": blockers, "ready": not blockers, "compiled": compiled, "needs_reboot": True}, updated, blob
 
@@ -265,38 +266,17 @@ class KernelDrivers:
                 current = hashlib.sha256((self.boot_text() + source + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
                 if current != expected_hash:
                     raise DriverError("uEnv изменился во время проверки — обновите предпросмотр", 409)
-                return self._commit(pin, enabled, text, blob)
+                return self._commit(pin, enabled, text, blob, plan["uenv_hash"])
 
-    def _commit(self, pin, enabled, text, blob):
-        backup = self.root / ("backup-" + str(time.time_ns()))
-        backup.mkdir(mode=0o700)
-        CodeTree._write(backup / "uEnv.txt", self.cfg.uenv_file.read_bytes())
-        os.chmod(backup / "uEnv.txt", 0o600)
-        if self.file.exists():
-            CodeTree._write(backup / "dht22.json", self.file.read_bytes())
+    def _commit(self, pin, enabled, text, blob, uenv_hash):
         dest = self.cfg.user_overlays_dir / (OVERLAY + ".dtbo")
-        if dest.exists():
-            CodeTree._write(backup / (OVERLAY + ".dtbo"), dest.read_bytes())
-        old_mode = self.cfg.uenv_file.stat().st_mode & 0o777
+        files = {self.file: json.dumps({"pin": pin, "enabled": enabled}).encode()}
+        if enabled:
+            files[dest] = blob
         try:
-            if enabled:
-                CodeTree._write(dest, blob)
-            # Retain the file on disable: live DT still uses its configuration until reboot.
-            CodeTree._write(self.file, json.dumps({"pin": pin, "enabled": enabled}).encode())
-            os.chmod(self.file, 0o600)
-            CodeTree._write(self.cfg.uenv_file, text.encode())
-            os.chmod(self.cfg.uenv_file, old_mode)
-        except OSError:
-            for target, saved in ((self.file, backup / "dht22.json"), (dest, backup / (OVERLAY + ".dtbo"))):
-                if saved.exists():
-                    CodeTree._write(target, saved.read_bytes())
-                else:
-                    target.unlink(missing_ok=True)
-            CodeTree._write(self.cfg.uenv_file, (backup / "uEnv.txt").read_bytes())
-            os.chmod(self.cfg.uenv_file, old_mode)
-            raise
-        log.info("DHT22 next boot enabled=%s pin=%s backup=%s", enabled, pin, backup)
-        return {"changed": True, "needs_reboot": True, "backup": str(backup)}
+            return self.overlays.uenv.commit(uenv_hash, text, files)
+        except UEnvError as e:
+            raise DriverError(str(e), 409) from e
 
     def read(self):
         self.real()

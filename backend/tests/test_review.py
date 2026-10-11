@@ -156,3 +156,23 @@ def test_review_8_dependencies_replace_rollback_and_delete(client, monkeypatch):
     install(root,True);assert site.resolve()!=old and not old.exists()
     target=site.resolve();sm.delete(sid)
     assert not site.exists() and not target.exists()
+
+
+def test_review_9_uenv_transaction_restores_all_targets(tmp_path, monkeypatch):
+    import hashlib
+    from pioneer.uenv import UEnv
+    from pioneer.config import Config
+    from pioneer.codetree import CodeTree
+    boot=tmp_path/'uEnv.txt';boot.write_text('old\n');boot.chmod(0o644)
+    config=tmp_path/'config.json';config.write_text('old config');config.chmod(0o600)
+    overlay=tmp_path/'new.dtbo'
+    service=UEnv(Config(uenv_file=boot,data_dir=tmp_path/'data'))
+    original=CodeTree._write;failed=False
+    def write(path,data):
+        nonlocal failed
+        if path==boot and not failed:failed=True;raise OSError('disk failure')
+        return original(path,data)
+    monkeypatch.setattr(CodeTree,'_write',staticmethod(write))
+    with pytest.raises(OSError):service.commit(hashlib.sha256(boot.read_bytes()).hexdigest(),'new\n',{config:b'new config',overlay:b'new'})
+    assert boot.read_text()=='old\n' and config.read_text()=='old config' and not overlay.exists()
+    assert boot.stat().st_mode&0o777==0o644 and config.stat().st_mode&0o777==0o600
