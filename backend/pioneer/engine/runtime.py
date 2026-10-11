@@ -568,7 +568,7 @@ class Engine:
     def in_engine_thread(self) -> bool:
         return threading.current_thread() is self._thread
 
-    def call(self, fn: Callable, *args, timeout: float = 10.0):
+    def call(self, fn: Callable, *args, timeout: float | None = 10.0):
         """Выполнить fn в потоке движка и дождаться результата (исключения пробрасываются)."""
         if self.in_engine_thread:
             return fn(*args)
@@ -672,7 +672,7 @@ class Engine:
             rt.start()
             self.runtimes[project_id] = rt
             return rt
-        return self.call(run)
+        return self.call(run, timeout=None)
 
     def _check_manifest(self, rt: ProjectRuntime) -> None:
         mine: dict[tuple[str, str], str] = {}
@@ -693,11 +693,11 @@ class Engine:
                 return False
             rt.stop()
             return True
-        return self.call(run)
+        return self.call(run, timeout=None)
 
     def _stop_all(self) -> None:
         for pid in list(self.runtimes):
             self.runtimes.pop(pid).stop()
 
     def stop_all(self) -> None:
-        self.call(self._stop_all)
+        self.call(self._stop_all, timeout=None)

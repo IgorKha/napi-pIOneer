@@ -115,3 +115,14 @@ def test_review_5_sdk_rpc_timeout_cleans_pending(monkeypatch):
         with pytest.raises(_rpc.PioneerError,match="core не ответил"):c.call("read")
         assert not c._pending
     finally:b.close();a.close()
+
+
+def test_review_6_lifecycle_waits_for_actual_completion(client, monkeypatch):
+    from pioneer.engine.runtime import ProjectRuntime
+    pm=client.app.state.projects;p=pm.create("slow lifecycle")
+    original_call=pm.engine.call;original_start=ProjectRuntime.start
+    def call(fn,*args,timeout=.01):return original_call(fn,*args,timeout=timeout)
+    def start(rt):time.sleep(.04);return original_start(rt)
+    monkeypatch.setattr(pm.engine,"call",call);monkeypatch.setattr(ProjectRuntime,"start",start)
+    pm.start(p.id);assert pm.engine.runtimes[p.id].running
+    pm.stop(p.id);assert p.id not in pm.engine.runtimes
