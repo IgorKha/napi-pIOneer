@@ -321,6 +321,8 @@ class ScriptManager:
         self.stop(sid)
         self.meta(sid)
         tree = self.tree(sid)
+        from pioneer.dependencies import remove
+        remove(tree.root)
         shutil.rmtree(tree.root)
         with self._lock:
             self._logs.pop(sid, None)

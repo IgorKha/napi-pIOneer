@@ -187,8 +187,8 @@ def test_wheel_requirements_locked_and_isolated(tmp_path):
     with pytest.raises(TreeError):install(root,False)
     assert install(root,True)['changed']
     assert site_for(root).exists() and not install(root,True)['changed']
-    (root/'requirements.txt').write_text('pillow==10.3.0')
-    with pytest.raises(TreeError,match='lock'):install(root,True)
+    (root/'requirements.txt').write_text('# changed empty set\n')
+    assert install(root,True)['changed']
 
 
 def test_watchdog_requires_disarmable_before_open(tmp_path,monkeypatch):

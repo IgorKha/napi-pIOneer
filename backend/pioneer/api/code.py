@@ -225,15 +225,18 @@ def run(kind: str, ident: str, request: Request) -> dict:
     return asdict(_guard(request.app.state.scripts.restart, ident))
 
 
+@router.delete("/{kind}/{ident}/dependencies")
 @router.post("/{kind}/{ident}/dependencies")
 def dependencies(kind:str, ident:str, request:Request, confirmed:bool=False):
-    from pioneer.dependencies import install
+    from pioneer.dependencies import install, remove
     t=tree(request,kind,ident)
     if kind=="lib":raise HTTPException(422,"зависимости устанавливаются в скрипт или пакет блока")
     if kind=="scripts" and request.app.state.scripts.status(ident).state=="running":
         raise HTTPException(409,"сначала остановите скрипт")
     if kind=="blocks" and request.app.state.projects.engine.runtimes:
         raise HTTPException(409,"для установки зависимостей блока сначала остановите проекты")
+    if request.method == "DELETE":
+        return guard(remove, t.root)
     try:return install(t.root,confirmed)
     except (OSError,TreeError):raise HTTPException(422,"проверьте requirements.txt и подтверждение установки колёс") from None
 

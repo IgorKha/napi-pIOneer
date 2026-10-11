@@ -116,6 +116,6 @@ class Modules:
             for key in meta['types']:self.registry.remove(key)
             kind=meta.get('model_kind')
             if kind in MODEL_KINDS:del MODEL_KINDS[kind]
-            from pioneer.dependencies import site_for
-            shutil.rmtree(site_for(self.path(ident,version)),ignore_errors=True)
+            from pioneer.dependencies import remove
+            remove(self.path(ident,version))
             shutil.rmtree(self.path(ident,version));del self.records[(ident,version)]

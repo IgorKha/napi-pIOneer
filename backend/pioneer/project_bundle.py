@@ -122,8 +122,6 @@ def import_bundle(app,data,confirmed):
             return pm.create(body['name'],body.get('description',''),graph)
         except BaseException:
             for ident in created:
-                from pioneer.dependencies import site_for
-                shutil.rmtree(site_for(app.state.cfg.data_dir/'blocks'/ident),ignore_errors=True)
                 bm.delete(ident)
             for path in libs:shutil.rmtree(path)
             for ident,version in modules:app.state.modules.remove(ident,version)

@@ -140,3 +140,19 @@ def test_review_7_watchdog_tolerates_transient_health_failure(tmp_path, monkeypa
     monkeypatch.setattr("pioneer.watchdog.os.write",lambda fd,data:writes.append(data))
     asyncio.run(w._feed())
     assert len(writes)==4 and "перезагрузка" in w.error and w.fd==123
+
+
+def test_review_8_dependencies_replace_rollback_and_delete(client, monkeypatch):
+    from types import SimpleNamespace
+    from pioneer.dependencies import install, site_for
+    sm=client.app.state.scripts;sid=sm.create("dependencies").id;root=sm.tree(sid).root
+    (root/"requirements.txt").write_text("")
+    install(root,True);site=site_for(root);old=site.resolve()
+    (root/"requirements.txt").write_text("fake-package==1")
+    monkeypatch.setattr("pioneer.dependencies.subprocess.run",lambda *a,**kw:SimpleNamespace(returncode=1))
+    with pytest.raises(ValueError):install(root,True)
+    assert site.resolve()==old and old.exists()
+    monkeypatch.setattr("pioneer.dependencies.subprocess.run",lambda *a,**kw:SimpleNamespace(returncode=0))
+    install(root,True);assert site.resolve()!=old and not old.exists()
+    target=site.resolve();sm.delete(sid)
+    assert not site.exists() and not target.exists()

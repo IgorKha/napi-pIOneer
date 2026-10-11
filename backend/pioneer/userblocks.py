@@ -357,6 +357,8 @@ class BlockManager:
                 self.registry.remove(key)
             tree = CodeTree(meta.parent)
             tree.files()
+            from pioneer.dependencies import remove
+            remove(tree.root)
             shutil.rmtree(tree.root)
 
     def _check_ids(self, slug: str, nodes: list[dict]) -> None:

@@ -132,6 +132,9 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
             await codeRequest(`${base}/dependencies?confirmed=true`, {method:"POST"});
           });
         }}>Установить зависимости</button>}
+        {kind !== "lib" && <button disabled={busy} onClick={() => mutate(async () => {
+          await codeRequest(`${base}/dependencies`, {method:"DELETE"});
+        })}>Удалить зависимости</button>}
         <button disabled={busy} onClick={() => create(false)}>+ файл</button>
         <button disabled={busy} onClick={() => create(true)}>+ папка</button>
         <label className="cursor-pointer">Загрузить<input disabled={busy} type="file" multiple className="hidden" onChange={e => { upload(e.target.files); e.target.value = ""; }} /></label>
