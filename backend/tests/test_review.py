@@ -561,3 +561,68 @@ def test_review_23_spi_reopen_rejects_changed_settings(tmp_path):
     finally:
         hw.close_all()
         hal.close()
+
+
+@pytest.mark.parametrize(
+    "safe_state,invert", [("off", False), ("off", True), ("on", False), ("on", True)]
+)
+def test_review_24_project_output_safe_after_failed_node_stop(
+    client, monkeypatch, safe_state, invert
+):
+    pm = client.app.state.projects
+    hw = pm.hw
+    p = pm.create("Safe teardown")
+    pm.apply_ops(
+        p.id,
+        [
+            {
+                "op": "add_node",
+                "id": "out",
+                "type": "builtin.digital_out",
+                "params": {"pin": "J9-7", "safe_state": safe_state, "invert": invert},
+            }
+        ],
+    )
+    pm.start(p.id)
+    rt = pm.engine.runtimes[p.id]
+    line = hw._open["J9-7"].line
+    writes = []
+    original = line.write
+    monkeypatch.setattr(line, "write", lambda value: (writes.append(value), original(value)))
+
+    def fail():
+        raise RuntimeError("stop failed")
+
+    monkeypatch.setattr(rt.nodes["out"], "stop", fail)
+    pm.stop(p.id)
+    assert writes[-1] == ((safe_state == "on") != invert)
+    assert "J9-7" not in hw.res.claims
+
+
+def test_review_24_block_output_safe_survives_worker_stop(client, monkeypatch):
+    bm, pm = client.app.state.blocks, client.app.state.projects
+    b = bm.create("Safe block")
+    result = bm.save(
+        b["id"],
+        "\n".join(
+            [
+                "from pioneer.block import Node, node",
+                '@node(id="safe_output", title="Safe output")',
+                "class SafeOutput(Node):",
+                "    def setup(self):",
+                '        self.hw.output("J9-7", initial=False, safe=True)',
+                "    def stop(self):",
+                '        raise RuntimeError("stop failed")',
+            ]
+        ),
+    )
+    assert not result["error"]
+    p = pm.create("Worker safe")
+    pm.apply_ops(p.id, [{"op": "add_node", "id": "out", "type": "user.safe_output"}])
+    pm.start(p.id)
+    line = pm.hw._open["J9-7"].line
+    writes, original = [], line.write
+    monkeypatch.setattr(line, "write", lambda value: (writes.append(value), original(value)))
+    pm.stop(p.id)
+    assert writes[-1] is True
+    assert "J9-7" not in pm.hw.res.claims

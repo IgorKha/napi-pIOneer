@@ -96,8 +96,8 @@ class ProjectHW:
         self.hw.acquire(self.owner, self.owner_name, pin, "gpio_in", debounce_ms=debounce_ms,
                         on_edge=on_edge, listener_key=f"{self.owner}#{node.id}")
 
-    def output(self, pin: str, initial: bool) -> None:
-        self.hw.acquire(self.owner, self.owner_name, pin, "gpio_out", initial=initial)
+    def output(self, pin: str, initial: bool = False, *, safe: bool = False) -> None:
+        self.hw.acquire(self.owner, self.owner_name, pin, "gpio_out", initial=initial, safe=safe)
 
     def pwm(self, pin: str) -> None:
         self.hw.acquire(self.owner, self.owner_name, pin, "soft_pwm")
@@ -126,7 +126,7 @@ class ProjectHW:
     def led(self, led: str):
         return self.hw.led(self.owner, self.owner_name, led)
 
-    def release(self, resource: str, *, safe_value: bool = False) -> None:
+    def release(self, resource: str, *, safe_value: bool | None = None) -> None:
         self.hw.release(self.owner, resource, safe_value=safe_value)
 
 
@@ -240,7 +240,7 @@ class ProjectRuntime:
         if self._blockhost is not None:
             self._blockhost.close()
             self._blockhost = None
-        self.engine.hw.release(self.owner, safe_value=False)
+        self.engine.hw.release(self.owner)
 
     # ---- волна
     def run_wave(self, origin: Origin, ctx: RequestContext | None, fn: Callable[[], None],

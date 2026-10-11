@@ -76,7 +76,8 @@ class DigitalOut(Node):
         return bool(on) != self.invert
 
     def setup(self):
-        self.hw.output(self.pin, initial=self._level(self.safe_state == "on"))
+        safe = self._level(self.safe_state == "on")
+        self.hw.output(self.pin, initial=safe, safe=safe)
 
     def start(self):
         self.on_change({"value"})

@@ -33,8 +33,8 @@ class BlockHW:
     def i2c(self, interface, addr):
         return Device(self, self.call("i2c_open", interface=interface, addr=addr))
 
-    def output(self, pin, initial=False):
-        self.call("acquire", pin=pin, mode="gpio_out", initial=initial)
+    def output(self, pin, initial=False, *, safe=False):
+        self.call("acquire", pin=pin, mode="gpio_out", initial=initial, safe=safe)
 
     def input(self, pin):
         self.call("acquire", pin=pin, mode="gpio_in")
@@ -81,7 +81,14 @@ class HardwareRPC:
         if op == "acquire":
             if a["mode"] not in ("gpio_in", "gpio_out"):
                 raise ValueError("неверный режим пина")
-            hw.acquire(owner, name, a["pin"], a["mode"], initial=a.get("initial", False))
+            hw.acquire(
+                owner,
+                name,
+                a["pin"],
+                a["mode"],
+                initial=a.get("initial", False),
+                safe=a.get("safe", False),
+            )
             return None
         if a.get("pin") not in hw.res.owned_by(owner):
             raise ValueError("пин не захвачен проектом")
