@@ -6,3 +6,5 @@ frontend/node_modules/
 frontend/dist/
 frontend/*.tsbuildinfo
 /sdk-reference.json
+backend/pioneer/vendor_ai/
+tools/kernel-drivers/builds/

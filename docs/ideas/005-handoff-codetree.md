@@ -2,6 +2,9 @@
 
 Контекст: [005-multifile-projects.md](005-multifile-projects.md).
 
+> Реализовано и установлено на плату 2026-10-11: CodeTree, миграция, файловое API, редактор, CLI.
+> Границы реализации и проверки — [code-projects.md](../code-projects.md). Ниже исходный план.
+
 ## Сейчас (баг)
 
 `pioneer/scripts.py`: worker стартует с `cwd=path.parent` = общая `data/scripts/` → `sys.path[0]` общий у всех скриптов, `import x` может подхватить чужой `x.py`. То же проверить для Python-блоков (`data/blocks/`) и Script-ноды (`data/script_cache/`). Исправить изоляцией: у каждого запуска свой корень.
