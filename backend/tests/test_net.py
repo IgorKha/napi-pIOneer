@@ -104,7 +104,7 @@ def test_webhook_reply_and_auth(client):
     assert client.post(f"{hooks}/temp", json={"t": 4}).status_code == 401
     assert client.post(f"{hooks}/nope", json={"t": 4}).status_code == 404
     t0 = time.monotonic()
-    r = client.post(f"{hooks}/temp?token=t0k", json={"t": 4})
+    r = client.post(f"{hooks}/temp", headers={"X-Pioneer-Token": "t0k"}, json={"t": 4})
     # ответ пришёл после Задержки: контекст запроса проехал через Delay и Фронт к «Ответу»
     assert r.status_code == 202 and r.json() == 40 and time.monotonic() - t0 >= 0.04
     live = client.get(f"{API}/projects/{pid}/live").json()

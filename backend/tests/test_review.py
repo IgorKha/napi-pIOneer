@@ -221,3 +221,20 @@ def test_review_12_duplicate_commands_share_one_execution(client, monkeypatch):
     with ThreadPoolExecutor(2) as pool:
         a=pool.submit(send);b=pool.submit(send);assert a.result()==b.result()
     assert len(executions)==1 and not remote._pending
+
+
+def test_review_13_webhook_rejects_query_token_and_bounds_stream(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from fastapi import HTTPException
+    from pioneer.api import hooks
+    node=SimpleNamespace(expected_token=lambda:"secret")
+    monkeypatch.setattr(hooks,"_find",lambda *args:("project",node))
+    request=SimpleNamespace(headers={},query_params={"token":"secret"})
+    assert asyncio.run(hooks.hook("test",request)).status_code==401
+    reads=[]
+    async def stream():
+        for i in range(100):reads.append(i);yield b"x"*65536
+    request.headers={"x-pioneer-token":"secret"};request.stream=stream
+    with pytest.raises(HTTPException) as error:asyncio.run(hooks.hook("test",request))
+    assert error.value.status_code==413 and len(reads)==5

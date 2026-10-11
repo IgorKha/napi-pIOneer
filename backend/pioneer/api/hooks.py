@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import hmac
+import json
 import threading
 import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from pioneer.api.code import limited_body
 from pioneer.engine.node import NodeError
 from pioneer.engine.types import Origin, RequestContext
 from pioneer.nodes.builtin.net import WebhookIn
@@ -30,18 +32,16 @@ async def hook(path: str, request: Request) -> JSONResponse:
     pid, node = _find(request, path)
     if node is None:
         return JSONResponse({"ok": False, "error": f"нет запущенного webhook «{path}»"}, 404)
-    given = request.headers.get("x-pioneer-token") or request.query_params.get("token") or ""
+    given = request.headers.get("x-pioneer-token") or ""
     try:
         expected = node.expected_token()
     except NodeError as e:
         return JSONResponse({"ok": False, "error": str(e)}, 500)
     if not expected or not hmac.compare_digest(given.encode(), expected.encode()):
         return JSONResponse({"ok": False, "error": "неверный токен"}, 401)
-    raw = await request.body()
-    if len(raw) > MAX_BODY:
-        return JSONResponse({"ok": False, "error": "тело больше 256 КБ"}, 413)
+    raw = await limited_body(request, MAX_BODY)
     try:
-        body = (await request.json()) if raw.strip() else None
+        body = json.loads(raw) if raw.strip() else None
     except ValueError:
         body = raw.decode("utf-8", "replace")
 
