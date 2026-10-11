@@ -82,10 +82,12 @@ class CodeTree:
                     out.append({"path": rel, "kind": "dir"})
                 elif p.is_file():
                     size = p.stat().st_size
+                    entry = {"path": rel, "kind": "file", "size": size}
                     if size > FILE_LIMIT:
-                        raise TreeError(f"{rel}: файл больше 5 МБ")
-                    out.append({"path": rel, "kind": "file", "size": size,
-                                "sha256": hashlib.sha256(p.read_bytes()).hexdigest()})
+                        entry["oversized"] = True
+                    else:
+                        entry["sha256"] = hashlib.sha256(p.read_bytes()).hexdigest()
+                    out.append(entry)
                 else:
                     raise TreeError("разрешены только обычные файлы и папки")
                 if len(out) > MAX_ENTRIES:
@@ -106,7 +108,7 @@ class CodeTree:
             if len(data) > FILE_LIMIT:
                 raise TreeError("файл больше 5 МБ")
             entries = self.files()
-            total = sum(e.get("size", 0) for e in entries) - (p.stat().st_size if p.is_file() else 0)
+            total = sum(e.get("size", 0) for e in entries if not e.get("oversized")) - (p.stat().st_size if p.is_file() and p.stat().st_size <= FILE_LIMIT else 0)
             if total + len(data) > TREE_LIMIT or len(entries) + len(PurePosixPath(name).parts) > MAX_ENTRIES:
                 raise TreeError("превышен лимит проекта (50 МБ / 2000 файлов и папок)")
             self._write(p, data)
@@ -148,7 +150,10 @@ class CodeTree:
     def export_to(self, target) -> None:
         with self.lock, zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr(META, json.dumps(self.meta(), ensure_ascii=False))
-            for e in self.files():
+            entries = self.files()
+            if any(e.get("oversized") for e in entries) or sum(e.get("size", 0) for e in entries) > TREE_LIMIT:
+                raise TreeError("данные превышают лимиты экспорта; перенесите большие файлы отдельно")
+            for e in entries:
                 if e["kind"] == "dir":
                     z.writestr(e["path"] + "/", b"")
                 else:

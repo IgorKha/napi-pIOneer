@@ -399,7 +399,7 @@ export interface BlockFull extends BlockMeta {
   code: string;
 }
 
-export interface CodeFile { path: string; kind: "file" | "dir"; size?: number; sha256?: string }
+export interface CodeFile { path: string; kind: "file" | "dir"; size?: number; sha256?: string; oversized?: boolean }
 export const codeUrl = (path: string) => `${API}/code/${path}`;
 export async function codeRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const res = await fetch(codeUrl(path), { ...init, headers: { "X-Pioneer": "1", ...init.headers } });

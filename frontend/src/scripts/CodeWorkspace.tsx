@@ -165,8 +165,8 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
             if (path) move(path, `${f.path}/${path.split("/").at(-1)}`);
             else upload(e.dataTransfer.files, false, f.path + "/");
           }}>
-          <button className="min-w-0 flex-1 truncate text-left" title={f.path} onClick={() => f.kind === "file" && open(f.path).catch(report)}>
-            {f.kind === "dir" ? "▸ " : ""}{f.path.split("/").at(-1)}{f.path === entry ? " ★" : ""}
+          <button className="min-w-0 flex-1 truncate text-left" title={f.path} onClick={() => f.kind === "file" && !f.oversized && open(f.path).catch(report)}>
+            {f.kind === "dir" ? "▸ " : ""}{f.path.split("/").at(-1)}{f.path === entry ? " ★" : ""}{f.oversized ? " (>5 МБ, данные)" : ""}
           </button>
           <button disabled={busy} aria-label={`Переименовать ${f.path}`} onClick={() => move(f.path)}>✎</button>
           <button disabled={busy} aria-label={`Удалить ${f.path}`} onClick={() => {

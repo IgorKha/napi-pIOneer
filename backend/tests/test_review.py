@@ -72,3 +72,18 @@ def test_review_3_script_output_safe_high(hw, tmp_path, monkeypatch, crash):
         hw.acquire("other", "other", "J9-7", "gpio_out", safe=True)
         hw.close_all();assert writes[-1] is True
     finally:sm.stop_all()
+
+
+def test_review_4_large_runtime_file_does_not_break_workspace(client):
+    from pioneer.api.app import API
+    from pioneer.codetree import CodeTree, FILE_LIMIT
+    sm = client.app.state.scripts
+    sid = sm.create("logger").id;tree=sm.tree(sid)
+    with (tree.root/"large.csv").open("wb") as f:f.truncate(FILE_LIMIT*12)
+    entry=next(e for e in tree.files() if e["path"]=="large.csv")
+    assert entry["oversized"] and "sha256" not in entry
+    tree.write("helper.py", b"value=1");tree.mkdir("folder")
+    with pytest.raises(ValueError):tree.write("too_big", b"x"*(FILE_LIMIT+1))
+    tree.delete("large.csv")
+    with (tree.root/"large.csv").open("wb") as f:f.truncate(FILE_LIMIT+1)
+    sm.delete(sid);assert not tree.root.exists()

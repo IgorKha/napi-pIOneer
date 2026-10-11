@@ -320,7 +320,6 @@ class ScriptManager:
         self.stop(sid)
         self.meta(sid)
         tree = self.tree(sid)
-        tree.files()
         shutil.rmtree(tree.root)
         with self._lock:
             self._logs.pop(sid, None)
