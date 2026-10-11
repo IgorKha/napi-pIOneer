@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pioneer.sdk import _rpc
 
 __all__ = ["Input", "Output", "Pwm", "Adc", "I2C", "SPI", "UART", "BoardLed", "Event",
-           "every", "after", "run", "sleep", "log", "PioneerError"]
+           "every", "after", "run", "sleep", "log", "PioneerError", "DHT22", "SHT30", "BH1750", "HardwarePwm"]
 
 PioneerError = _rpc.PioneerError
 
@@ -505,14 +505,43 @@ class SPI:
         return bytes.fromhex(_rpc.call("spi_xfer", h=self._h, data=bytes(data).hex()))
 
 
+class HardwarePwm:
+    """Аппаратный PWM через ядро Linux, частота 1…1000000 Гц, duty 0…1.
+
+    Args:
+        interface: pwm2 (J9-11) или pwm3 (J9-13); нужен DT-оверлей и reboot.
+        freq: Частота в герцах.
+        duty: Доля активного периода.
+
+    Hardware:
+        Конфликтует с I2C3 m0. Только логический сигнал 3.3 В; после освобождения
+        канала уровень не гарантируется — для нагрузки нужен внешний safe-state.
+    """
+    def __init__(self, interface: str, freq: float = 100, duty: float = 0):
+        from pioneer.hal.hardware_pwm import settings
+        settings(freq, duty)
+        self._h = _rpc.call("hardware_pwm_open", iface=interface)
+        self.set(freq=freq, duty=duty)
+
+    def set(self, *, freq: float | None = None, duty: float | None = None):
+        """Изменить частоту и/или заполнение без смены владельца канала.
+
+        Args:
+            freq: Новая частота, Гц; None — оставить прежнюю.
+            duty: Новое заполнение 0…1; None — оставить прежнее.
+        """
+        _rpc.call("hardware_pwm_set", h=self._h, freq=freq, duty=duty)
+
+
 class UART:
-    """Последовательный порт, эксклюзивно.
+    """UART: общий RX с независимыми буферами, эксклюзивный TX.
 
     Args:
         interface: Интерфейс из описания платы: `"uart1"` (J9-24 TX, J9-23 RX),
             `"uart2"`, `"uart3"`, `"uart4"`. Вариант m0/m1 выбирается по включённому оверлею.
             `"uart0"` — системная консоль, недоступен.
-        baud: Скорость, бод.
+        baud: Скорость, бод; должна совпадать у всех владельцев.
+        direction: both — эксклюзивный порт; rx — только общий приём, tx — только запись.
 
     Raises:
         PioneerError: Интерфейс выключен, порт занят другим владельцем или процессом
@@ -528,9 +557,9 @@ class UART:
         log(port.read(64, timeout=0.5))
     """
 
-    def __init__(self, interface: str, baud: int = 9600):
+    def __init__(self, interface: str, baud: int = 9600, *, direction: str = "both"):
         self.interface, self.baud = interface, baud
-        self._h = _rpc.call("uart_open", iface=interface, baud=baud)
+        self._h = _rpc.call("uart_open", iface=interface, baud=baud, direction=direction)
 
     def write(self, data: bytes | str) -> None:
         """Отправить данные.
@@ -687,3 +716,91 @@ def sleep(seconds: float) -> None:
         seconds: Длительность, секунды.
     """
     time.sleep(seconds)
+
+
+class DHT22:
+    """DHT22 / AM2302 через драйвер ядра dht11 и IIO, настроенный в админке.
+
+    Returns:
+        read(): Словарь ok, temperature (°C), humidity (% RH), time; при ошибке ok=False, error.
+
+    Raises:
+        PioneerError: Драйвер/датчик не подключён; настройте Настройки → Драйверы.
+
+    Hardware:
+        VCC 3.3 В, общий GND, DATA с подтяжкой к 3.3 В. Кэш в core не допускает
+        чтение чаще одного раза в 2 с даже при нескольких потребителях.
+
+    Example:
+        sensor = DHT22()
+        log(sensor.read())
+    """
+
+    def read(self) -> dict:
+        """Прочитать температуру и влажность без управления пином из Python."""
+        return _rpc.call("dht22_read")
+
+
+class SHT30:
+    """Температура и влажность SHT30/SHT31 (SHT3x-DIS) по I2C.
+
+    Args:
+        interface: Включённая шина, например "i2c1".
+        addr: 0x44 или 0x45.
+
+    Hardware:
+        Питание и подтяжки SDA/SCL — 3.3 В, общий GND.
+
+    Example:
+        sensor = SHT30("i2c1")
+        log(sensor.read())
+    """
+    def __init__(self, interface: str = "i2c1", addr: int = 0x44):
+        if addr not in (0x44, 0x45):
+            raise PioneerError("SHT30: адрес 0x44 или 0x45")
+        self._io = I2C(interface, addr)
+
+    def read(self) -> dict:
+        """Измерить °C и % RH с проверкой CRC, около 20 мс.
+
+        Returns:
+            Словарь temperature, humidity. Ошибка шины/CRC вызывает PioneerError.
+        """
+        from pioneer.drivers.sensors import sht30
+        try:
+            return sht30(self._io)
+        except ValueError as e:
+            raise PioneerError(str(e)) from None
+
+
+class BH1750:
+    """Освещённость BH1750 по I2C, одноразовое измерение высокого разрешения.
+
+    Args:
+        interface: Включённая шина, например "i2c1".
+        addr: 0x23 или 0x5C.
+
+    Hardware:
+        Питание и подтяжки SDA/SCL — 3.3 В, общий GND.
+
+    Example:
+        sensor = BH1750("i2c1")
+        log(sensor.read()["lux"])
+    """
+    def __init__(self, interface: str = "i2c1", addr: int = 0x23):
+        if addr not in (0x23, 0x5c):
+            raise PioneerError("BH1750: адрес 0x23 или 0x5C")
+        self._io = I2C(interface, addr)
+
+    def read(self) -> dict:
+        """Измерить освещённость в люксах, ожидание до 180 мс.
+
+        Returns:
+            Словарь lux. Ошибка шины вызывает PioneerError. Не вызывайте
+            из обработчика кнопки: измерение блокирует цикл скрипта на 180 мс.
+        """
+        from pioneer.drivers.sensors import bh1750
+        try:
+            return bh1750(self._io)
+        except ValueError as e:
+            raise PioneerError(str(e)) from None

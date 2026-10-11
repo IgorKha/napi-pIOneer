@@ -109,6 +109,8 @@ class Param:
     max: float | None = None
     unit: str | None = None
     name: str = ""
+    modes: tuple[str, ...] = ()
+    required: bool = False
 
     def __set_name__(self, owner, name):
         self.name = name
@@ -121,11 +123,11 @@ class Param:
             choices = [c if isinstance(c, (list, tuple)) else (c, c) for c in self.type]
             return {"name": self.name, "kind": "choice", "default": self.default, "title": self.title,
                     "doc": self.doc, "choices": [[str(v), str(t)] for v, t in choices]}
-        kind = _PARAM_KINDS.get(self.type)
+        kind = self.type if self.type in ("pin", "interface", "led") else _PARAM_KINDS.get(self.type)
         if kind is None:
             raise TypeError(f"параметр {self.name}: тип bool, int, float, str или список вариантов")
         return {"name": self.name, "kind": kind, "default": self.default, "title": self.title, "doc": self.doc,
-                "min": self.min, "max": self.max, "unit": self.unit}
+                "min": self.min, "max": self.max, "unit": self.unit, "modes": self.modes, "required": self.required}
 
 
 class _Port:
@@ -166,6 +168,11 @@ class Node:
 
     def stop(self) -> None:
         """Проект останавливается."""
+
+    @property
+    def hw(self):
+        from pioneer.block_hardware import BlockHW
+        return BlockHW(self)
 
     def log(self, *parts: Any) -> None:
         """Строка в лог проекта."""

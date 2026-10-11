@@ -267,6 +267,7 @@ class NodeError(Exception):
 
 class Node:
     TYPE: ClassVar[NodeType]
+    persistent_outputs: ClassVar[tuple[str, ...]] = ()
 
     def __init__(self, rt: ProjectRuntime, node_id: str, params: dict, label: str | None):
         self._rt = rt
@@ -303,6 +304,10 @@ class Node:
         """Проект останавливается: таймеры уже отменены; освободить своё."""
 
     # ---- помощники
+    def checkpoint_value(self, output: str, default):
+        """Validated checkpoint value, opt-in at project level. Events/timers are not restored."""
+        return self._rt.saved_state.get(self.id, {}).get(output, default)
+
     @property
     def hw(self):
         return self._rt.hw

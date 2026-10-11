@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import runpy
 import signal
 import sys
@@ -20,9 +22,12 @@ def main() -> None:
     from pioneer.sdk import _rpc
     _rpc.connect_from_env()
 
-    path = sys.argv[1]
+    path = str(Path(sys.argv[1]).resolve())
+    root = os.getcwd()
+    from pioneer.dependencies import site_for
+    sys.path = [root, str(site_for(Path(root))), os.environ["PIONEER_LIB"], *[p for p in sys.path if p and p != root]]
     sys.argv = [path]
-    runpy.run_path(path, run_name="__main__")
+    runpy.run_path(os.path.relpath(path, root), run_name="__main__")
     if sdk._loop.has_work and not sdk._loop.running:
         sdk.run()
 

@@ -28,6 +28,16 @@ CONSUMER = "pioneer"
 HOLDERS_CACHE_S = 2.0
 
 
+def _gpio_path(bank: int, root=Path('/dev')) -> str:
+    import gpiod
+    # DT pinctrl can defer a bank's probe and reorder gpiochip numbers.
+    for path in root.glob('gpiochip*'):
+        with gpiod.Chip(str(path)) as chip:
+            if chip.get_info().label == f'gpio{bank}':
+                return str(path)
+    raise OSError(errno.ENODEV, f'GPIO-банк gpio{bank} отсутствует')
+
+
 # ---------------------------------------------------------------- GPIO
 class _Input(InputLine):
     def __init__(self, hal: LinuxHAL, req, line: int):
@@ -241,6 +251,13 @@ class LinuxHAL(HAL):
         self._i2c: dict[int, _I2C] = {}
         self._holders: dict[str, list[str]] = {}
         self._holders_at = 0.0
+        self._gpio_paths: dict[int, str] = {}
+
+    def open_hw_pwm(self, interface, board):
+        from pioneer.hal.hardware_pwm import open_pwm
+        if board.dt is None:
+            raise OSError("для аппаратного PWM нужен живой Device Tree")
+        return open_pwm(board.dt.node_of(interface.dt))
 
     def open_input(self, gpio: GpioRef, *, edge: EdgeMode = "none", debounce_ms: int = 0,
                    on_edge: EdgeCallback | None = None) -> InputLine:
@@ -261,15 +278,17 @@ class LinuxHAL(HAL):
             direction=Direction.OUTPUT, output_value=Value.ACTIVE if initial else Value.INACTIVE)}))
         return _Output(req, gpio.line, initial)
 
-    @staticmethod
-    def _request(gpio: GpioRef, kwargs: dict):
+    def _request(self, gpio: GpioRef, kwargs: dict):
         import gpiod
+        if gpio.chip not in self._gpio_paths:
+            self._gpio_paths[gpio.chip] = _gpio_path(gpio.chip)
+        path = self._gpio_paths[gpio.chip]
         try:
-            return gpiod.request_lines(gpio.path, consumer=CONSUMER, **kwargs)
+            return gpiod.request_lines(path, consumer=CONSUMER, **kwargs)
         except OSError as e:
             if e.errno != errno.EBUSY:
                 raise
-            with gpiod.Chip(gpio.path) as chip:
+            with gpiod.Chip(path) as chip:
                 consumer = chip.get_line_info(gpio.line).consumer or "?"
             raise LineBusy(errno.EBUSY, f"занят: линию держит «{consumer}» (драйвер ядра или другой процесс)") from e
 

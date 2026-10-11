@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import urllib.error
 import urllib.request
@@ -58,12 +59,9 @@ class HttpRequest(Node):
             if line.strip():
                 k, sep, v = line.partition(":")
                 if not sep:
-                    raise NodeError(f"заголовок {line.strip()!r}: нужно «Имя: значение»")
+                    raise NodeError("заголовок: нужно «Имя: значение»")
                 headers[k.strip()] = v.strip()
-        data = None
-        if self.method != "GET" and self.body is not None:
-            data = json.dumps(self.body, ensure_ascii=False, default=str).encode()
-            headers.setdefault("Content-Type", "application/json")
+        data = self.request_body(headers)
         req = urllib.request.Request(url, data=data, headers=headers, method=self.method)
         timeout = self.timeout_s
         self._in_flight += 1
@@ -71,10 +69,17 @@ class HttpRequest(Node):
         def work():
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as r:
-                    return r.status, r.headers.get_content_type(), r.read(MAX_BODY)
+                    return r.status, r.headers.get_content_type(), read_body(r, MAX_BODY)
             except urllib.error.HTTPError as e:
-                return e.code, e.headers.get_content_type() if e.headers else "", e.read(MAX_BODY)
+                with e:
+                    return e.code, e.headers.get_content_type() if e.headers else "", read_body(e, MAX_BODY)
         self.run_async(work, self._done)
+
+    def request_body(self, headers):
+        if self.method != "GET" and self.body is not None:
+            headers.setdefault("Content-Type", "application/json")
+            return json.dumps(self.body, ensure_ascii=False, default=str).encode()
+        return None
 
     def _done(self, result, err):
         self._in_flight -= 1
@@ -85,18 +90,126 @@ class HttpRequest(Node):
             self.failed.emit(f"нет связи: {reason}")
             raise NodeError(f"нет связи: {reason}")
         code, ctype, raw = result
-        text = raw.decode("utf-8", "replace")
-        try:
-            body = json.loads(text) if "json" in ctype or text[:1] in "{[" else text
-        except ValueError:
-            body = text
+        body = self.decode_response(ctype, raw)
         self.status.set(code)
         self.response.set(body)
         self.ok.set(200 <= code < 300)
+        self.response_received(body, code)
         if 200 <= code < 300:
             self.done.emit(jsonable(body, 4000))
         else:
             self.failed.emit(f"HTTP {code}")
+
+    def response_received(self, body, code):
+        pass
+
+    def decode_response(self, ctype, raw):
+        text = raw.decode("utf-8", "replace")
+        try:
+            return json.loads(text) if "json" in ctype or text[:1] in "{[" else text
+        except ValueError:
+            return text
+
+
+def read_body(response, limit):
+    raw = response.read(limit + 1)
+    if len(raw) > limit:
+        raise NodeError(f"ответ больше {limit // 1024} КБ")
+    return raw
+
+
+def json_path(data, path):
+    for part in [p for p in (path or "").split(".") if p]:
+        if isinstance(data, dict) and part in data:
+            data = data[part]
+        elif isinstance(data, list) and part.lstrip("-").isdigit() and -len(data) <= int(part) < len(data):
+            data = data[int(part)]
+        else:
+            return None, False
+    return data, True
+
+
+@node("builtin.http_process", title="HTTP: обработка", category=CAT, color=COLOR, doc="""
+По событию «Отправить» отправляет POST на внешний обработчик. Режим «JSON» передаёт
+вход «Тело» как application/json; «Изображение» — байты PNG/JPEG со входа «Изображение»
+с Content-Type image/png или image/jpeg (без multipart и base64). Изображение до 2 МБ,
+JSON-запрос и ответ до 256 КБ. Multipart не поддерживается.
+
+Выход «Ответ» — весь JSON, «Успех» означает HTTP 2xx; «Число» берётся по «Пути числа»
+(например score или result.value). «Число найдено» позволяет отличить отсутствие
+числа от нуля. Не-JSON ответ считается ошибкой обработки.
+
+Заголовки поддерживают {{secret:имя}}. Запрос идёт в фоне, максимум 4 одновременно,
+автоматических повторов POST нет. «Готово» → последующее действие в графе.
+Пример: Изображение по URL → Изображение и Готово → HTTP: обработка → Поле JSON.
+""")
+class HttpProcess(HttpRequest):
+    method = Param("choice", "POST", title="Метод", choices=[("POST", "POST")])
+    mode = Param("choice", "image", title="Тело запроса", choices=[("image", "Изображение"), ("json", "JSON")])
+    image = In("Image", title="Изображение")
+    value_path = Param("str", "value", title="Путь числа", doc="Путь в JSON-ответе, например result.score")
+    value = Out("Number", title="Число")
+    found = Out("Bool", title="Число найдено")
+
+    def on_event(self, name, ev):
+        self.value.set(0)
+        self.found.set(False)
+        self.ok.set(False)
+        self.response.set(None)
+        try:
+            super().on_event(name, ev)
+        except NodeError as err:
+            self.failed.emit(str(err))
+            raise
+
+    def request_body(self, headers):
+        if self.mode == "image":
+            from pioneer.images import image_type
+            raw = self.image
+            ctype = image_type(raw)
+            headers["Content-Type"] = ctype
+        else:
+            try:
+                raw = json.dumps(self.body, ensure_ascii=False, allow_nan=False).encode()
+            except (TypeError, ValueError):
+                raise NodeError("тело запроса должно быть JSON") from None
+            if len(raw) > MAX_BODY:
+                raise NodeError("JSON-запрос больше 256 КБ")
+            headers["Content-Type"] = "application/json"
+        return raw
+
+    def _done(self, result, err):
+        # Не оставляем прежнее число после сетевой ошибки или не-JSON ответа.
+        self.value.set(0)
+        self.found.set(False)
+        if err is not None:
+            self.response.set(None)
+            if not isinstance(err, NodeError):
+                err = NodeError(f"запрос не выполнен ({type(err).__name__})")
+        if err is None and 200 <= result[0] < 300:
+            try:
+                json.loads(result[2])
+            except (ValueError, UnicodeDecodeError):
+                self._in_flight -= 1
+                self.status.set(result[0])
+                self.response.set(None)
+                self.ok.set(False)
+                self.failed.emit("обработчик вернул не JSON")
+                raise NodeError("обработчик вернул не JSON")
+        super()._done(result, err)
+
+    def decode_response(self, ctype, raw):
+        try:
+            return json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return None
+
+    def response_received(self, body, code):
+        value, found = json_path(body, self.value_path)
+        found = (200 <= code < 300 and found and isinstance(value, (int, float))
+                 and not isinstance(value, bool) and math.isfinite(value))
+        self.value.set(value if found else 0)
+        self.found.set(found)
 
 
 @node("builtin.webhook_in", title="Входящий webhook", category=CAT, color=COLOR, doc="""
@@ -186,15 +299,7 @@ class JsonGet(Node):
         self.on_change({"data"})
 
     def on_change(self, changed):
-        cur, ok = self.data, True
-        for part in [p for p in (self.path or "").split(".") if p]:
-            if isinstance(cur, dict) and part in cur:
-                cur = cur[part]
-            elif isinstance(cur, list) and part.lstrip("-").isdigit() and -len(cur) <= int(part) < len(cur):
-                cur = cur[int(part)]
-            else:
-                cur, ok = None, False
-                break
+        cur, ok = json_path(self.data, self.path)
         self.found.set(ok and cur is not None)
         self.value.set(cur)
         num = None

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from pioneer.api import deps
 from pioneer.board import InterfaceError
 from pioneer.resources import ResourceConflict
+from pioneer.overlays import OverlayError
 
 router = APIRouter()
 MANUAL_OWNER = "manual"
@@ -132,6 +133,41 @@ class InterfacePlanRequest(BaseModel):
 def plan_interfaces(body: InterfacePlanRequest, request: Request) -> dict:
     """Предпросмотр смены интерфейсов (pinmux). Ничего не пишет — применение в фазе 3."""
     try:
-        return asdict(deps.board(request).plan_interfaces(body.enable, body.disable))
-    except InterfaceError as e:
+        return request.app.state.overlays.preview(body.enable, body.disable)
+    except (InterfaceError, OverlayError, OSError) as e:
         raise HTTPException(422, str(e)) from e
+
+
+class ApplyInterfaces(InterfacePlanRequest):
+    hash: str
+    confirmed: bool = False
+
+
+@router.post("/board/interfaces/apply")
+def apply_interfaces(body: ApplyInterfaces, request: Request) -> dict:
+    if not body.confirmed:
+        raise HTTPException(422, "нужно явное подтверждение предпросмотра")
+    try:
+        return request.app.state.overlays.apply(body.enable, body.disable, body.hash)
+    except OverlayError as e:
+        raise HTTPException(e.code, str(e)) from None
+    except (OSError, InterfaceError) as e:
+        raise HTTPException(422, str(e)) from None
+
+
+class RebootRequest(BaseModel):
+    confirmation: str
+
+
+@router.post("/board/reboot")
+def reboot(body: RebootRequest, request: Request):
+    if body.confirmation != "REBOOT" or deps.hal(request).name != "linux":
+        raise HTTPException(422, "перезагрузка требует REBOOT и реальной платы")
+    import subprocess
+    from starlette.background import BackgroundTask
+    from fastapi.responses import JSONResponse
+    def action():
+        request.app.state.projects.stop_all()
+        request.app.state.scripts.stop_all()
+        subprocess.run(["/sbin/reboot"], check=True)
+    return JSONResponse({"rebooting": True}, background=BackgroundTask(action))

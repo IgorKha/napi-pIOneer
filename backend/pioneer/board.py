@@ -30,12 +30,8 @@ RuntimeMode = Literal["gpio_in", "gpio_out", "soft_pwm", "adc"]
 
 @dataclass(frozen=True)
 class GpioRef:
-    chip: int
+    chip: int  # Hardware bank gpioN; Linux gpiochip device indices may differ.
     line: int
-
-    @property
-    def path(self) -> str:
-        return f"/dev/gpiochip{self.chip}"
 
 
 @dataclass

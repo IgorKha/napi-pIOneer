@@ -24,12 +24,14 @@ from pioneer.engine.node import NodeRegistry
 DOCS_DIR = REPO_ROOT / "docs" / "sdk"
 SECTIONS = ("Args", "Returns", "Raises", "Example", "Hardware")
 # Порядок и заголовки руководств (файлы docs/sdk/<id>.md)
-GUIDES = [("start", "Начало"), ("recipes", "Рецепты"), ("blocks", "Свои блоки"), ("hardware", "Железо"),
-          ("errors", "Ошибки")]
+GUIDES = [("start", "Начало"), ("projects", "Проекты и пульт"), ("recipes", "Рецепты"),
+          ("workspace", "Файлы и библиотеки"), ("blocks", "Свои блоки"), ("ai", "AI-помощник"),
+          ("network", "MQTT и HTTP"), ("sensors", "Датчики I2C"), ("system", "Диагностика и сохранность"), ("hardware", "Железо"),
+          ("drivers", "Драйверы ядра"), ("modules", "Модули периферии"), ("errors", "Ошибки")]
 
 # Режим/шина, нужные классу SDK, — по ним из платы выбираются поддерживающие пины
 SUPPORT = {"Output": ("pin", "gpio_out"), "Input": ("pin", "gpio_in"), "Pwm": ("pin", "soft_pwm"),
-           "Adc": ("pin", "adc"), "I2C": ("bus", "i2c"), "SPI": ("bus", "spi"), "UART": ("bus", "uart"),
+           "Adc": ("pin", "adc"), "HardwarePwm": ("bus", "pwm"), "SHT30": ("bus", "i2c"), "BH1750": ("bus", "i2c"), "I2C": ("bus", "i2c"), "SPI": ("bus", "spi"), "UART": ("bus", "uart"),
            "BoardLed": ("led", None)}
 # Значения-заготовки для сниппетов автодополнения
 PLACEHOLDER = {"pin": '"J9-7"', "addr": "0x3C", "seconds": "1.0", "led": '"user"', "fn": "fn", "name": '"heartbeat"',

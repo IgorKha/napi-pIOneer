@@ -149,6 +149,9 @@ class HAL(ABC):
         from pioneer.hal.softpwm import SoftPwm
         return SoftPwm(self.open_output(gpio), freq, duty)
 
+    def open_hw_pwm(self, interface, board) -> PwmLine:
+        raise NotImplementedError("HAL не поддерживает аппаратный PWM")
+
     @abstractmethod
     def read_adc(self, channel: int) -> float:
         """Напряжение на входе ADC, вольты (0…vref)."""

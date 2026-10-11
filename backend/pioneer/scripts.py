@@ -1,6 +1,6 @@
 """Скрипты (фаза 0): хранение, запуск в worker-процессе, RPC к HW, лог и статус.
 
-data/scripts/<id>.py — код, <id>.json — {name, autostart, created, updated}.
+data/scripts/<id>/ — файлы проекта, pioneer.json — метаданные.
 Скрипт исполняется в отдельном процессе (pioneer.worker): падение/зависание не роняет
 core; при выходе worker'а все его ресурсы освобождаются, выходы — в safe state.
 """
@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from pioneer.codetree import CodeTree, migrate
 from pioneer.config import REPO_ROOT
 from pioneer.hw import HW
 from pioneer.resources import ResourceConflict
@@ -52,6 +54,8 @@ class ScriptMeta:
     autostart: bool = False
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
+    entry: str = "main.py"
+    restart_on_save: bool = False
 
 
 @dataclass
@@ -72,6 +76,7 @@ class _Runner:
 
     def __init__(self, mgr: ScriptManager, meta: ScriptMeta, path: Path):
         self.mgr, self.meta = mgr, meta
+        self.root = mgr.tree(meta.id).root
         self.owner = f"script:{meta.id}"
         self.owner_name = f"скрипт «{meta.name}»"
         self.handles: dict[int, object] = {}
@@ -83,11 +88,11 @@ class _Runner:
         parent, child = socket.socketpair()
         self.sock = parent
         env = {**os.environ, "PIONEER_WORKER_FD": str(child.fileno()), "PYTHONUNBUFFERED": "1",
-               "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO_ROOT / "backend"),
-                                                           os.environ.get("PYTHONPATH")]))}
+               "PIONEER_LIB": str(mgr.dir.parent / "lib"),
+               "PYTHONPATH": str(REPO_ROOT / "backend")}
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "pioneer.worker", str(path)],
-            pass_fds=[child.fileno()], env=env, cwd=path.parent,
+            pass_fds=[child.fileno()], env=env, cwd=mgr.tree(meta.id).root,
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True)
         child.close()
@@ -126,6 +131,7 @@ class _Runner:
     def _pipe(self, stream, kind: str) -> None:
         for raw in iter(stream.readline, b""):
             text = raw.decode("utf-8", "replace").rstrip("\n")
+            text = text.replace(f'File "{self.root}/', 'File "')
             if kind == "err" and text.strip():
                 self._last_err = text.strip()  # последняя строка трейсбека = суть ошибки
             self.mgr._log(self.meta.id, kind, text)
@@ -158,6 +164,10 @@ class _Runner:
 
     def _handle(self, op: str, **a):
         hw, o, n = self.mgr.hw, self.owner, self.owner_name
+        if op == "dht22_read":
+            if hw.drivers is None:
+                raise ValueError("драйвер DHT22 не настроен в core")
+            return hw.drivers.read()
         if op == "acquire":
             hw.acquire(o, n, a["pin"], a["mode"], initial=a.get("initial", False),
                        debounce_ms=a.get("debounce_ms", 0),
@@ -191,8 +201,13 @@ class _Runner:
             return self._handle_id(hw.spi(o, n, a["iface"], a["cs"], mode=a["mode"], speed_hz=a["speed_hz"]))
         if op == "spi_xfer":
             return self.handles[a["h"]].xfer(bytes.fromhex(a["data"])).hex()
+        if op == "hardware_pwm_open":
+            return self._handle_id(hw.hardware_pwm(o, n, a["iface"]))
+        if op == "hardware_pwm_set":
+            self.handles[a["h"]].set(a.get("freq"), a.get("duty"))
+            return None
         if op == "uart_open":
-            return self._handle_id(hw.uart(o, n, a["iface"], baud=a["baud"]))
+            return self._handle_id(hw.uart(o, n, a["iface"], baud=a["baud"], direction=a.get("direction", "both")))
         if op == "uart_write":
             self.handles[a["h"]].write(bytes.fromhex(a["data"]))
             return None
@@ -228,7 +243,7 @@ def _err_text(e: Exception) -> str:
 class ScriptManager:
     def __init__(self, data_dir: Path, hw: HW):
         self.dir = data_dir / "scripts"
-        self.dir.mkdir(parents=True, exist_ok=True)
+        migrate(self.dir, "main.py")
         self.hw = hw
         self._lock = threading.RLock()
         self._runners: dict[str, _Runner] = {}
@@ -244,12 +259,19 @@ class ScriptManager:
     def _paths(self, sid: str) -> tuple[Path, Path]:
         if not re.fullmatch(r"[a-z0-9]{6,32}", sid):
             raise ScriptError(f"плохой id скрипта {sid!r}")
-        return self.dir / f"{sid}.py", self.dir / f"{sid}.json"
+        tree = CodeTree(self.dir / sid)
+        meta_file = tree.path("pioneer.json", metadata=True)
+        entry = tree.meta().get("entry", "main.py") if meta_file.exists() else "main.py"
+        return tree.path(entry), meta_file
+
+    def tree(self, sid: str) -> CodeTree:
+        self._paths(sid)
+        return CodeTree(self.dir / sid)
 
     def list(self) -> list[dict]:
         out = []
-        for meta_file in sorted(self.dir.glob("*.json")):
-            meta = self.meta(meta_file.stem)
+        for meta_file in sorted(self.dir.glob("*/pioneer.json")):
+            meta = self.meta(meta_file.parent.name)
             out.append({**asdict(meta), "status": asdict(self.status(meta.id))})
         return sorted(out, key=lambda m: m["name"].lower())
 
@@ -267,41 +289,59 @@ class ScriptManager:
     def create(self, name: str, code: str | None = None) -> ScriptMeta:
         meta = ScriptMeta(id=secrets.token_hex(4), name=name.strip() or "Без имени")
         code_file, meta_file = self._paths(meta.id)
-        code_file.write_text(TEMPLATE if code is None else code)
-        meta_file.write_text(json.dumps(asdict(meta), ensure_ascii=False))
+        self.tree(meta.id).write(meta.entry, (TEMPLATE if code is None else code).encode())
+        self.tree(meta.id).set_meta(asdict(meta))
         return meta
 
     def update(self, sid: str, *, name: str | None = None, code: str | None = None,
-               autostart: bool | None = None) -> ScriptMeta:
+               autostart: bool | None = None, entry: str | None = None,
+               restart_on_save: bool | None = None) -> ScriptMeta:
         meta = self.meta(sid)
-        code_file, meta_file = self._paths(sid)
+        tree = self.tree(sid)
+        if entry is not None:
+            if not entry.endswith(".py") or not tree.path(entry).is_file():
+                raise ScriptError("точка входа должна быть существующим Python-файлом")
+            meta.entry = entry
+        if restart_on_save is not None:
+            meta.restart_on_save = restart_on_save
         if code is not None:
-            code_file.write_text(code)
+            tree.write(meta.entry, code.encode())
         if name is not None:
             meta.name = name.strip() or meta.name
         if autostart is not None:
             meta.autostart = autostart
         meta.updated = time.time()
-        meta_file.write_text(json.dumps(asdict(meta), ensure_ascii=False))
+        tree.set_meta(asdict(meta))
+        if code is not None:
+            self.saved(sid)
         return meta
 
     def delete(self, sid: str) -> None:
         self.stop(sid)
-        for p in self._paths(sid):
-            p.unlink(missing_ok=True)
+        self.meta(sid)
+        tree = self.tree(sid)
+        tree.files()
+        shutil.rmtree(tree.root)
         with self._lock:
             self._logs.pop(sid, None)
             self._status.pop(sid, None)
 
     # ---- запуск
-    def start(self, sid: str) -> Status:
+    def saved(self, sid: str) -> None:
+        if self.meta(sid).restart_on_save and self.status(sid).state == "running":
+            self.restart(sid)
+
+    def start(self, sid: str, file: str | None = None) -> Status:
         with self._lock:
             if sid in self._runners:
                 raise ScriptError("скрипт уже запущен")
             meta = self.meta(sid)
             self._logs.setdefault(sid, collections.deque(maxlen=LOG_LINES))
             self._log(sid, "sys", f"запуск «{meta.name}»")
-            runner = _Runner(self, meta, self._paths(sid)[0])
+            path = self.tree(sid).path(file) if file is not None else self._paths(sid)[0]
+            if not path.is_file() or path.suffix != ".py":
+                raise ScriptError("нет Python-файла для запуска")
+            runner = _Runner(self, meta, path)
             self._runners[sid] = runner
             self._set_status(sid, runner.status)
             return runner.status

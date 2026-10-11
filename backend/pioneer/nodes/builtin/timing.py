@@ -63,13 +63,14 @@ class Pulse(Node):
 Пример: кнопка (Включение) → Переключатель → LED — одна кнопка вкл/выкл.
 """)
 class Toggle(Node):
+    persistent_outputs = ("out",)
     initial = Param("bool", False, title="Начальное", doc="Значение при старте и после сброса")
     toggle = In("Event", title="Переключить")
     reset = In("Event", title="Сброс")
     out = Out("Bool", title="Состояние")
 
     def start(self):
-        self.out.set(self.initial)
+        self.out.set(self.checkpoint_value("out", self.initial))
 
     def on_event(self, name, ev):
         self.out.set(self.initial if name == "reset" else not self.out.value)
@@ -79,6 +80,7 @@ class Toggle(Node):
 Считает события: «+» прибавляет шаг, «−» вычитает, «Сброс» — к начальному значению.
 """)
 class Counter(Node):
+    persistent_outputs = ("count",)
     step = Param("float", 1.0, title="Шаг")
     initial = Param("float", 0.0, title="Начальное")
     up = In("Event", title="+")
@@ -87,7 +89,7 @@ class Counter(Node):
     count = Out("Number", title="Счёт")
 
     def start(self):
-        self.count.set(self.initial)
+        self.count.set(self.checkpoint_value("count", self.initial))
 
     def on_event(self, name, ev):
         cur = self.count.value or 0.0
@@ -101,13 +103,14 @@ RS-триггер: «Установить» → true, «Сбросить» → f
 Пример: датчик протечки (Включение) → Установить; кнопка «сброс аварии» → Сбросить.
 """)
 class Latch(Node):
+    persistent_outputs = ("out",)
     initial = Param("bool", False, title="Начальное")
     set_on = In("Event", title="Установить")
     reset = In("Event", title="Сбросить")
     out = Out("Bool", title="Состояние")
 
     def start(self):
-        self.out.set(self.initial)
+        self.out.set(self.checkpoint_value("out", self.initial))
 
     def on_event(self, name, ev):
         self.out.set(name == "set_on")

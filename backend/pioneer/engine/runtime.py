@@ -114,8 +114,14 @@ class ProjectHW:
     def value(self, pin: str):
         return self.hw.value(pin)
 
-    def uart(self, iface: str, baud: int):
-        return self.hw.uart(self.owner, self.owner_name, iface, baud=baud)
+    def i2c(self, iface: str, addr: int):
+        return self.hw.i2c(self.owner, self.owner_name, iface, addr)
+
+    def hardware_pwm(self, iface):
+        return self.hw.hardware_pwm(self.owner, self.owner_name, iface)
+
+    def uart(self, iface: str, baud: int, direction="both"):
+        return self.hw.uart(self.owner, self.owner_name, iface, baud=baud, direction=direction)
 
     def led(self, led: str):
         return self.hw.led(self.owner, self.owner_name, led)
@@ -127,10 +133,11 @@ class ProjectHW:
 # ---------------------------------------------------------------- проект
 class ProjectRuntime:
     def __init__(self, engine: Engine, project_id: str, name: str, graph: Graph, rev: int = 0,
-                 aliases: dict[str, list[str]] | None = None):
+                 aliases: dict[str, list[str]] | None = None, saved_state: dict | None = None):
         self.engine, self.project_id, self.name, self.graph, self.rev = engine, project_id, name, graph, rev
         # live-ключ внутреннего выхода группы → ключи выходов нод-групп (граф развёрнут, groups.py)
         self.aliases = aliases or {}
+        self.saved_state = saved_state or {}
         self.group_revs: dict[str, int] = {}
         self.owner, self.owner_name = f"project:{project_id}", f"проект «{name}»"
         self.hw = ProjectHW(engine.hw, self.owner, self.owner_name)
@@ -647,12 +654,12 @@ class Engine:
 
     # ---- проекты
     def start_project(self, project_id: str, name: str, graph: Graph, rev: int = 0,
-                      aliases: dict[str, list[str]] | None = None) -> ProjectRuntime:
+                      aliases: dict[str, list[str]] | None = None, saved_state: dict | None = None) -> ProjectRuntime:
         def run():
             if project_id in self.runtimes:
                 raise StartError("проект уже запущен")
             try:
-                rt = ProjectRuntime(self, project_id, name, graph, rev, aliases)
+                rt = ProjectRuntime(self, project_id, name, graph, rev, aliases, saved_state)
             except KeyError as e:
                 raise StartError(str(e.args[0])) from None
             self._check_manifest(rt)

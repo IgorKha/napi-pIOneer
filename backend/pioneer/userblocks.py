@@ -1,6 +1,6 @@
 """Python-блоки пользователя (spec 3.6 b): хранение, проверка, регистрация, исполнение.
 
-data/blocks/<slug>.py — код, <slug>.json — {name, updated, nodes: [схемы], error}.
+data/blocks/<slug>/ — код и ассеты, pioneer.json — метаданные и схемы.
 Схема извлекается отдельным процессом (`python -m pioneer.blockhost --schema`): core код
 пользователя не исполняет. Типы регистрируются как `user.<id>@<version>`; нода в графе —
 BlockProxy: входы/выходы живут в движке, обработчики — в worker-процессе проекта
@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -26,6 +27,7 @@ import time
 from pathlib import Path
 from typing import Any, ClassVar
 
+from pioneer.codetree import CodeTree, migrate
 from pioneer.config import REPO_ROOT
 from pioneer.engine.node import In, Node, NodeError, NodeRegistry, Out, Param, node
 from pioneer.engine.types import Origin, jsonable
@@ -62,7 +64,7 @@ class Hysteresis(Node):
 
 def _env() -> dict:
     return {**os.environ, "PYTHONUNBUFFERED": "1",
-            "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO_ROOT / "backend"), os.environ.get("PYTHONPATH")]))}
+            "PYTHONPATH": str(REPO_ROOT / "backend")}
 
 
 def extract_schema(path: Path) -> dict:
@@ -82,8 +84,9 @@ def extract_schema(path: Path) -> dict:
 class BlockHostClient:
     """Процесс pioneer.blockhost одного проекта."""
 
-    def __init__(self, on_async, on_log):
+    def __init__(self, on_async, on_log, on_hardware=None):
         self.on_async, self.on_log = on_async, on_log
+        self.on_hardware = on_hardware
         parent, child = socket.socketpair()
         self.sock = parent
         env = {**_env(), "PIONEER_WORKER_FD": str(child.fileno())}
@@ -102,7 +105,14 @@ class BlockHostClient:
         try:
             for line in self.sock.makefile("r", encoding="utf-8"):
                 msg = json.loads(line)
-                if "async" in msg:
+                if "hardware" in msg:
+                    try:
+                        result=self.on_hardware(msg["node"],msg["op"],msg["args"])
+                        reply={"hardware_reply":msg["hardware"],"ok":True,"result":result}
+                    except Exception as e:
+                        reply={"hardware_reply":msg["hardware"],"ok":False,"error":str(e)[:1000]}
+                    with self._send_lock:self.sock.sendall((json.dumps(reply)+"\n").encode())
+                elif "async" in msg:
                     self.on_async(msg["async"], msg["actions"])
                 elif slot := self._pending.pop(msg.get("id"), None):
                     slot[1] = msg
@@ -231,11 +241,12 @@ def open_blockhost(rt) -> BlockHostClient:
 
     def on_log(text: str) -> None:
         rt.engine.loop.call_soon_threadsafe(rt.log, text)
-    return BlockHostClient(on_async, on_log)
+    from pioneer.block_hardware import HardwareRPC
+    return BlockHostClient(on_async, on_log, HardwareRPC(rt).call)
 
 
 # ---------------------------------------------------------------- хранилище и регистрация
-def _proxy_type(schema: dict, file: Path, registry: NodeRegistry):
+def _proxy_type(schema: dict, file: Path, registry: NodeRegistry, *, prefix=PREFIX, version=None):
     attrs: dict[str, Any] = {"FILE": str(file), "BLOCK_ID": schema["id"]}
     for i in schema["inputs"]:
         attrs[i["name"]] = In(i["type"], i.get("default"), title=i.get("title"), doc=i.get("doc") or "",
@@ -245,11 +256,11 @@ def _proxy_type(schema: dict, file: Path, registry: NodeRegistry):
     for p in schema["params"]:
         attrs[p["name"]] = Param(p["kind"], p.get("default"), title=p.get("title") or p["name"], doc=p.get("doc") or "",
                                  choices=[tuple(c) for c in p.get("choices") or ()] or None,
-                                 min=p.get("min"), max=p.get("max"), unit=p.get("unit"))
+                                 min=p.get("min"), max=p.get("max"), unit=p.get("unit"), modes=tuple(p.get("modes", ())), required=p.get("required", False))
     cls = type(f"Block_{re.sub(r'\\W', '_', schema['id'])}", (BlockProxy,), attrs)
     doc = schema.get("doc") or f"Пользовательский блок «{schema['title']}» (Python, файл {file.name})."
-    return node(PREFIX + schema["id"], title=schema["title"], category=schema.get("category") or "Мои блоки",
-                doc=doc, version=schema.get("version", 1), color=schema.get("color") or "#7a5a2e",
+    return node(prefix + schema["id"], title=schema["title"], category=schema.get("category") or "Мои блоки",
+                doc=doc, version=version if version is not None else schema.get("version", 1), color=schema.get("color") or "#7a5a2e",
                 breaks_cycle=schema.get("breaks_cycle", False), registry=registry)(cls)
 
 
@@ -262,24 +273,27 @@ class BlockError(Exception):
 class BlockManager:
     def __init__(self, data_dir: Path, registry: NodeRegistry):
         self.dir = data_dir / "blocks"
-        self.dir.mkdir(parents=True, exist_ok=True)
+        migrate(self.dir, "block.py")
         self.registry = registry
         if SCRIPT_KEY not in registry.types:
             register_script_type(registry, data_dir / "script_cache")
         self._types: dict[str, list[str]] = {}  # slug -> ключи зарегистрированных типов
         self._lock = threading.RLock()
-        for meta in sorted(self.dir.glob("*.json")):
+        for meta in sorted(self.dir.glob("*/pioneer.json")):
             try:
                 m = json.loads(meta.read_text())
                 if m.get("nodes"):
-                    self._register(meta.stem, m["nodes"])
+                    self._register(meta.parent.name, m["nodes"])
             except (ValueError, KeyError, TypeError) as e:
                 log.error("блок %s не загружен: %s", meta.stem, e)
 
     def _paths(self, slug: str) -> tuple[Path, Path]:
         if not re.fullmatch(r"[a-z0-9]{6,32}", slug or ""):
             raise BlockError(f"плохой id блока {slug!r}", 404)
-        return self.dir / f"{slug}.py", self.dir / f"{slug}.json"
+        tree = CodeTree(self.dir / slug)
+        meta = tree.path("pioneer.json", metadata=True)
+        entry = tree.meta().get("entry", "block.py") if meta.exists() else "block.py"
+        return tree.path(entry), meta
 
     def _meta(self, slug: str) -> dict:
         code, meta = self._paths(slug)
@@ -292,9 +306,9 @@ class BlockManager:
 
     def list(self) -> list[dict]:
         out = []
-        for f in self.dir.glob("*.py"):
-            m = self._meta(f.stem)
-            out.append({"id": f.stem, "name": m.get("name", f.stem), "updated": m.get("updated"),
+        for f in self.dir.glob("*/pioneer.json"):
+            m = self._meta(f.parent.name)
+            out.append({"id": f.parent.name, "name": m.get("name", f.parent.name), "updated": m.get("updated"),
                         "types": [PREFIX + n["id"] for n in m.get("nodes", [])], "error": m.get("error")})
         return sorted(out, key=lambda b: b["name"].lower())
 
@@ -313,10 +327,11 @@ class BlockManager:
         code_file, meta_file = self._paths(slug)
         with self._lock:
             old = {} if new else self._meta(slug)
-            code_file.write_text(code)
+            tree = CodeTree(code_file.parent)
+            tree.write(code_file.name, code.encode())
             res = extract_schema(code_file)
             meta = {"name": name or old.get("name") or "Мой блок", "updated": time.time(),
-                    "nodes": old.get("nodes", []), "error": None}
+                    "nodes": old.get("nodes", []), "error": None, "entry": old.get("entry", "block.py")}
             if res.get("ok"):
                 try:
                     self._check_ids(slug, res["nodes"])
@@ -326,7 +341,7 @@ class BlockManager:
                     meta["error"] = str(e) or type(e).__name__
             else:
                 meta["error"] = res.get("error")
-            meta_file.write_text(json.dumps(meta, ensure_ascii=False, indent=1))
+            tree.set_meta(meta)
         return {"id": slug, **meta, "types": [PREFIX + n["id"] for n in meta["nodes"]]}
 
     def validate(self, code: str) -> dict:
@@ -340,8 +355,9 @@ class BlockManager:
         with self._lock:
             for key in self._types.pop(slug, []):
                 self.registry.remove(key)
-            code.unlink(missing_ok=True)
-            meta.unlink(missing_ok=True)
+            tree = CodeTree(meta.parent)
+            tree.files()
+            shutil.rmtree(tree.root)
 
     def _check_ids(self, slug: str, nodes: list[dict]) -> None:
         ids = [n["id"] for n in nodes]
@@ -416,7 +432,9 @@ class ScriptTypes:
         with self._lock:
             if h in self._mem:
                 return self._mem[h]
-            py, js = self.dir / f"{h}.py", self.dir / f"{h}.json"
+            root = self.dir / h
+            root.mkdir(exist_ok=True)
+            py, js = root / "block.py", root / "schema.json"
             if not py.exists():
                 py.write_text(code)
             try:

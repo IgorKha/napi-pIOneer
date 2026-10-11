@@ -23,9 +23,9 @@ from typing import Literal
 
 from pioneer.board import Board, Interface, InterfaceError, RuntimeMode
 
-BusMode = Literal["i2c", "spi", "uart", "led"]
+BusMode = Literal["i2c", "spi", "uart", "led", "pwm", "uart_rx", "uart_tx"]
 Mode = RuntimeMode | BusMode
-SHARED: frozenset[str] = frozenset({"gpio_in", "adc"})
+SHARED: frozenset[str] = frozenset({"gpio_in", "adc", "uart_rx"})
 
 _I2C = re.compile(r"^(i2c\d+)@0x([0-9a-f]{1,2})$")
 _SPI = re.compile(r"^(spi\d+)\.cs(\d+)$")
@@ -72,6 +72,13 @@ class ResourceManager:
             self._check_pin(resource, mode)
         else:
             self._check_bus(resource, mode)
+        if resource.startswith("uart"):
+            ctl = resource.split(":")[0]
+            clashes = ([ctl + ":rx", ctl + ":tx"] if resource == ctl else [ctl])
+            for rid in clashes:
+                other = self.claims.get(rid)
+                if other and any(o != owner for o in other.owners):
+                    raise ResourceConflict(f"{resource}: UART занят в несовместимом режиме")
         claim = self.claims.get(resource)
         if claim is None or owner in claim.owners and len(claim.owners) == 1:
             return
@@ -108,6 +115,12 @@ class ResourceManager:
             cs_roles = {r for r in iface.pins.values() if r.startswith("CSN")}
             if f"CSN{m[2]}" not in cs_roles:
                 raise ResourceConflict(f"{resource}: на гребёнке выведены только {', '.join(sorted(cs_roles))}")
+        elif re.fullmatch(r"pwm\d+", resource):
+            self._need(mode, "pwm", resource)
+            self._enabled_iface(resource, "pwm")
+        elif m := re.fullmatch(r"(uart\d+):(rx|tx)", resource):
+            self._need(mode, "uart_" + m[2], resource)
+            self._enabled_iface(m[1], "uart")
         elif m := _UART.match(resource):
             self._need(mode, "uart", resource)
             self._enabled_iface(m[1], "uart")

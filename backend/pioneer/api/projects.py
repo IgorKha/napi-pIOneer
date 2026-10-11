@@ -5,10 +5,12 @@ from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 from pioneer.projects import ProjectError, ProjectManager
+from pioneer.engine.node import NodeError
+from pioneer.images import image_type
 
 router = APIRouter()
 
@@ -48,6 +50,12 @@ def create_project(body: CreateProject, request: Request) -> dict:
     return asdict(_guard(_pm(request).create, body.name, body.description, body.graph))
 
 
+@router.get("/project-templates")
+def templates():
+    from pioneer.templates import TEMPLATES
+    return {"templates": TEMPLATES}
+
+
 @router.get("/projects/{pid}")
 def get_project(pid: str, request: Request) -> dict:
     pm = _pm(request)
@@ -58,12 +66,54 @@ class UpdateProject(BaseModel):
     name: str | None = None
     description: str | None = None
     autostart: bool | None = None
+    save_state: bool | None = None
 
 
 @router.put("/projects/{pid}")
 def update_project(pid: str, body: UpdateProject, request: Request) -> dict:
     return asdict(_guard(_pm(request).update_meta, pid, name=body.name, description=body.description,
-                         autostart=body.autostart))
+                         autostart=body.autostart, save_state=body.save_state))
+
+
+@router.get("/projects/{pid}/export")
+def export_project(pid: str, request: Request) -> JSONResponse:
+    pm = _pm(request)
+    meta, graph = _guard(pm._read, pid)
+    flat, _, _ = pm._flat(graph)
+    body = {"format": "pioneer-project", "version": 1,
+            "name": meta.name, "description": meta.description, "graph": flat.to_json(),
+            "required_types": sorted({n.type for n in flat.nodes.values()})}
+    return JSONResponse(body, headers={"Content-Disposition": f'attachment; filename="pioneer-{pid}.json"'})
+
+
+@router.post("/projects/import")
+async def import_project(request: Request) -> dict:
+    # Bound before JSON decode (nginx permits larger uploads for CodeTree ZIPs).
+    raw = bytearray()
+    async for chunk in request.stream():
+        raw.extend(chunk)
+        if len(raw) > 1024 * 1024:
+            raise HTTPException(413, "граф больше 1 МБ")
+    import json
+    try:
+        body = json.loads(raw)
+        if body.get("format") != "pioneer-project" or body.get("version") != 1:
+            raise ValueError("формат")
+        graph = body["graph"]
+        if not isinstance(graph, dict) or len(graph.get("nodes", [])) > 500 or len(graph.get("edges", [])) > 2000:
+            raise ValueError("слишком большой граф")
+        ids = [n["id"] for n in graph.get("nodes", [])]
+        if len(set(ids)) != len(ids):
+            raise ValueError("повторяющиеся id")
+        name, description = body["name"], body.get("description", "")
+        if not isinstance(name, str) or not isinstance(description, str):
+            raise ValueError("метаданные")
+        created = _pm(request).create(name, description, graph)
+    except ProjectError as e:
+        raise HTTPException(e.code, str(e)) from None
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise HTTPException(422, "неверный файл проекта") from None
+    return asdict(created)  # always new id, stopped; no autostart or checkpoint imported
 
 
 @router.delete("/projects/{pid}")
@@ -115,6 +165,41 @@ def project_live(pid: str, request: Request) -> dict:
     return _pm(request).live_snapshot(pid)
 
 
+@router.get("/projects/{pid}/image")
+def project_image(pid: str, node: str, request: Request, output: str = "image") -> Response:
+    pm = _pm(request)
+    _guard(pm._read, pid)
+
+    def latest():
+        rt = pm.engine.runtimes.get(pid)
+        if rt is None:
+            return None
+        key = f"{node}.{output}"
+        # Выход группы в live — псевдоним выхода её внутренней ноды.
+        key = next((src for src, aliases in rt.aliases.items() if key in aliases), key)
+        sample = rt.sample(*key.rsplit(".", 1))
+        return sample.value if sample else None
+
+    raw = pm.engine.call(latest)
+    try:
+        ctype = image_type(raw)
+    except NodeError:
+        raise HTTPException(404, "нет изображения") from None
+    return Response(raw, media_type=ctype, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/projects/{pid}/images/{name}")
+def saved_image(pid: str, name: str, request: Request) -> FileResponse:
+    pm = _pm(request)
+    _guard(pm._read, pid)
+    try:
+        path = pm.engine.images.path(pid, name)
+    except (NodeError, FileNotFoundError):
+        raise HTTPException(404, "нет изображения") from None
+    return FileResponse(path, media_type="image/png" if path.suffix == ".png" else "image/jpeg",
+                        filename=name, headers={"X-Content-Type-Options": "nosniff"})
+
+
 @router.get("/projects/{pid}/log")
 def project_log(pid: str, request: Request) -> list[dict]:
     return _pm(request).log_tail(pid)
@@ -136,3 +221,32 @@ def panic(request: Request) -> JSONResponse:
     _pm(request).stop_all()
     request.app.state.scripts.stop_all()
     return JSONResponse({"stopped": True})
+
+
+@router.get("/projects/{pid}/bundle.zip")
+def bundle_export(pid:str, request:Request):
+    import tempfile
+    from pathlib import Path
+    from fastapi.responses import FileResponse
+    from starlette.background import BackgroundTask
+    from pioneer.project_bundle import export_to
+    from pioneer.codetree import TreeError
+    with tempfile.NamedTemporaryFile(prefix='pioneer-bundle-',suffix='.zip',delete=False) as f:path=Path(f.name)
+    try:export_to(request.app,pid,path)
+    except (ProjectError,TreeError,KeyError,OSError) as e:
+        path.unlink(missing_ok=True);raise HTTPException(422,str(e)) from None
+    return FileResponse(path,media_type='application/zip',filename=f'pioneer-{pid}.zip',background=BackgroundTask(path.unlink,missing_ok=True))
+
+@router.post("/projects/import.zip")
+async def bundle_import(request:Request, confirmed:bool=False):
+    import asyncio,tempfile,zipfile
+    from pathlib import Path
+    from pioneer.api.code import upload_to
+    from pioneer.codetree import TREE_LIMIT,TreeError
+    from pioneer.project_bundle import import_bundle
+    if not confirmed:raise HTTPException(422,'подтвердите доверие импортируемому Python-коду')
+    with tempfile.TemporaryDirectory(dir=request.app.state.cfg.data_dir) as tmp:
+        data=await upload_to(request,Path(tmp)/'project.zip',TREE_LIMIT)
+        try:return asdict(await asyncio.to_thread(import_bundle,request.app,data,confirmed))
+        except (OSError,ValueError,KeyError,TypeError,ProjectError,zipfile.BadZipFile,TreeError):
+            raise HTTPException(422,"пакет повреждён, конфликтует с установленным кодом или не подтверждено доверие") from None

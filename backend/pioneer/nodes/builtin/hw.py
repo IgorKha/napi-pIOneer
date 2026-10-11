@@ -174,7 +174,7 @@ class UartRead(Node):
     received = Out("Event", title="Получено", doc="Пришла строка; payload — её текст")
 
     def setup(self):
-        self._port = self.hw.uart(self.interface, self.baud)
+        self._port = self.hw.uart(self.interface, self.baud, "rx")
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._reader, name=f"uart-read-{self.id}", daemon=True)
         self._thread.start()
@@ -227,7 +227,7 @@ class UartWrite(Node):
     send = In("Event", title="Отправить", doc="Отправить текущий текст")
 
     def setup(self):
-        self._port = self.hw.uart(self.interface, self.baud)
+        self._port = self.hw.uart(self.interface, self.baud, "tx")
 
     def _send(self):
         end = {"lf": "\n", "crlf": "\r\n", "none": ""}[self.ending]
@@ -354,3 +354,74 @@ class Tm1637(Node):
             self._drv.off()  # погасить, пока линии ещё наши
         except Exception:
             pass
+
+
+@node("builtin.dht22", title="DHT22 / AM2302 (ядро)", category=CAT, color=COLOR, doc="""
+Температура и влажность через Linux-драйвер dht11 и IIO. Сначала подключите датчик
+в Настройки → Драйверы, примените оверлей и перезагрузите плату. Пин уже держит ядро;
+эта нода не захватывает GPIO и не исполняет протокол DHT из Python.
+
+Измерения выполняются вне потока движка; общий кэш core не допускает чтение чаще 2 с.
+При ошибке valid=false, error содержит причину, числовые выходы хранят последнее
+успешное значение. Подключайте valid при управлении нагрузкой по температуре.
+Питание модуля 3.3 В; DATA подтянут к 3.3 В, общая земля.
+""")
+class Dht22(Node):
+    interval_ms = Param("int", 5000, title="Интервал", min=2000, max=3600000, unit="мс")
+    temperature = Out("Number", title="Температура, °C")
+    humidity = Out("Number", title="Влажность, % RH")
+    valid = Out("Bool", title="Измерение корректно")
+    error = Out("String", title="Ошибка")
+    measured = Out("Event", title="Измерено")
+
+    def setup(self):
+        self._pending = False
+
+    def start(self):
+        self.valid.set(False)
+        self._poll()
+        self.every(self.interval_ms / 1000, self._poll)
+
+    def _poll(self):
+        if self._pending:
+            return
+        self._pending = True
+        def read():
+            drivers = self.hw.hw.drivers
+            if drivers is None:
+                raise ValueError("сначала подключите DHT22 через Настройки → Драйверы")
+            return drivers.read()
+        self.run_async(read, self._done)
+
+    def _done(self, sample, failure):
+        self._pending = False
+        if failure:
+            self.valid.set(False)
+            self.error.set(str(failure))
+        elif not sample["ok"]:
+            self.valid.set(False)
+            self.error.set(sample["error"])
+        else:
+            self.temperature.set(sample["temperature"])
+            self.humidity.set(sample["humidity"])
+            self.error.set("")
+            self.valid.set(True)
+            self.measured.emit(sample)
+
+
+@node("builtin.hardware_pwm", title="ШИМ (аппаратный)", category=CAT, color=COLOR,
+      doc="Аппаратный PWM ядра Linux. pwm2=J9-11, pwm3=J9-13; конфликт с I2C3 m0. Сначала включите оверлей и перезагрузите плату. После stop канал освобождается, безопасный уровень нагрузки обеспечьте внешней схемой.")
+class HardwarePwm(Node):
+    interface = Param("interface", "pwm2", modes=("pwm",), required=True, title="Контроллер")
+    freq = Param("float", 100.0, min=1, max=1000000, unit="Гц", title="Частота")
+    duty = In("Number", 0.0, min=0, max=1, title="Заполнение")
+
+    def setup(self):
+        self._channel = self.hw.hardware_pwm(self.interface)
+        self._channel.set(self.freq, 0)
+
+    def start(self):
+        self.on_change({"duty"})
+
+    def on_change(self, changed):
+        self._channel.set(duty=self.duty)

@@ -210,9 +210,14 @@ def param_resources(nt: NodeType, params: dict, board: Board) -> dict[str, str]:
             kind = p.modes[0]
             ctl = board.interfaces[v].controller if v in board.interfaces else v
             if kind == "uart":
-                out[uart_id(ctl)] = "uart"
-            elif kind == "i2c" and "addr" in params:
-                out[i2c_id(ctl, int(params["addr"]))] = "i2c"
+                direction = "rx" if nt.id == "builtin.uart_read" else "tx" if nt.id == "builtin.uart_write" else "both"
+                out[uart_id(ctl) + (":" + direction if direction != "both" else "")] = "uart_" + direction if direction != "both" else "uart"
+            elif kind == "pwm":
+                out[ctl] = "pwm"
+            elif kind == "i2c" and "addr" in nt.params:
+                addr = params.get("addr", nt.params["addr"].default)
+                if addr is not None:
+                    out[i2c_id(ctl, int(addr))] = "i2c"
             elif kind == "spi":
                 out[spi_id(ctl, int(params.get("cs", 0)))] = "spi"
     return out
@@ -247,7 +252,7 @@ def validate(graph: Graph, registry: NodeRegistry, board: Board | None = None, *
             except ValueError as e:
                 rep.errors.append(Issue(f"{p.title or name}: {e}", node=n.id, param=name))
         for p in nt.params.values():
-            if p.required and n.params.get(p.name) in (None, ""):
+            if p.required and n.params.get(p.name, p.default) in (None, ""):
                 rep.incomplete.append(Issue(f"не задан параметр «{p.title or p.name}»", node=n.id, param=p.name))
         for name, value in n.inputs.items():
             i = nt.inputs.get(name)
@@ -312,6 +317,9 @@ def _check_resources(graph: Graph, types: dict[str, NodeType], board: Board, rep
             rep.incomplete.append(Issue(f"{rid} используется несколькими нодами как выход/вход одновременно",
                                     node=us[1][0], param="pin"))
             continue
+        if len(us) > 1 and modes & {"i2c", "spi", "led", "pwm", "uart_tx"}:
+            rep.incomplete.append(Issue(f"{rid} используется несколькими нодами эксклюзивно", node=us[1][0]))
+            continue
         node = us[0][0]
         if rid in board.pins:
             mode = us[0][1]
@@ -321,7 +329,7 @@ def _check_resources(graph: Graph, types: dict[str, NodeType], board: Board, rep
                        else "занят драйвером ядра" if func == "kernel" else f"сейчас недоступен как {mode}")
                 rep.warnings.append(Issue(f"{rid} {why} — проект не запустится", node=node, param="pin"))
         else:
-            ctl = rid.split("@")[0].split(".")[0]
+            ctl = rid.split("@")[0].split(".")[0].split(":")[0]
             if not rid.startswith("led:"):
                 try:
                     board.bus_interface(ctl)
@@ -329,7 +337,7 @@ def _check_resources(graph: Graph, types: dict[str, NodeType], board: Board, rep
                     rep.warnings.append(Issue(f"{e} — проект не запустится", node=node, param="interface"))
         if rid in foreign:
             fmode, owner = foreign[rid]
-            if not (fmode == us[0][1] and fmode in ("gpio_in", "adc")):
+            if not (fmode == us[0][1] and fmode in ("gpio_in", "adc", "uart_rx")):
                 rep.warnings.append(Issue(f"{rid} сейчас занят: {owner}", node=node))
 
 

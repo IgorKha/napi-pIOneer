@@ -45,9 +45,11 @@ class I2CDevice:
 class HW:
     def __init__(self, board: Board, hal: HAL, resources: ResourceManager):
         self.board, self.hal, self.res = board, hal, resources
+        self.drivers = None  # attached by application; kernel configuration is not exposed to scripts
         self._open: dict[str, _Open] = {}
         self._handles: dict[str, SPIDevice | UARTPort | LedLine] = {}  # эксклюзивные открытые ресурсы
         self._lock = threading.RLock()
+        self._uart_hubs = {}
         self._watchers: list[PinListener] = []  # все изменения входов (live-уровни для UI)
 
     def watch(self, cb: PinListener) -> None:
@@ -119,10 +121,33 @@ class HW:
         return self._exclusive(owner, owner_name, spi_id(bus.controller, cs), "spi",
                                lambda: self.hal.open_spi(bus.number, cs, mode=mode, speed_hz=speed_hz))
 
-    def uart(self, owner: str, owner_name: str, iface: str, *, baud: int = 9600) -> UARTPort:
+    def uart(self, owner: str, owner_name: str, iface: str, *, baud: int = 9600, direction="both") -> UARTPort:
+        from pioneer.hal.uart_hub import UARTHub
+        if direction not in ("both", "rx", "tx"):
+            raise ValueError("UART direction: both/rx/tx")
+        if not isinstance(baud, int) or not 300 <= baud <= 4_000_000:
+            raise ValueError("скорость UART 300…4000000 бод")
         bus = self.bus(iface, "uart")
-        return self._exclusive(owner, owner_name, uart_id(bus.controller), "uart",
-                               lambda: self.hal.open_uart(bus.device, baud=baud))
+        rid = uart_id(bus.controller) + (":" + direction if direction != "both" else "")
+        mode = "uart_" + direction if direction != "both" else "uart"
+        with self._lock:
+            was_owned = rid in self.res.claims and owner in self.res.claims[rid].owners
+            self.res.claim(owner, owner_name, rid, mode)
+            hub = self._uart_hubs.get(bus.controller)
+            try:
+                if hub is None:
+                    hub = self._uart_hubs[bus.controller] = UARTHub(self.hal.open_uart(bus.device, baud=baud))
+                return hub.subscribe(owner, direction, baud)
+            except Exception:
+                if not was_owned: self.res.release(owner, rid)
+                if hub is not None and not hub.subscriptions:
+                    hub.close();self._uart_hubs.pop(bus.controller, None)
+                raise
+
+    def hardware_pwm(self, owner, owner_name, iface):
+        bus = self.bus(iface, "pwm")
+        return self._exclusive(owner, owner_name, bus.controller, "pwm",
+                               lambda: self.hal.open_hw_pwm(bus, self.board))
 
     def led(self, owner: str, owner_name: str, led: str) -> LedLine:
         info = self.board.leds[led] if led in self.board.leds else None
@@ -148,6 +173,11 @@ class HW:
     # ---- освобождение
     def release(self, owner: str, resource: str | None = None, *, safe_value: bool = False) -> None:
         with self._lock:
+            for ctl, hub in list(self._uart_hubs.items()):
+                if resource is None or resource.split(":")[0] == ctl:
+                    hub.remove(owner, resource.split(":",1)[1] if resource and ":" in resource else ("both" if resource else None))
+                    if not hub.subscriptions:
+                        hub.close();del self._uart_hubs[ctl]
             for rid in self.res.release(owner, resource):
                 self._close(rid, safe_value)
             for rid, o in self._open.items():
@@ -157,6 +187,8 @@ class HW:
 
     def close_all(self, safe_value: bool = False) -> None:
         with self._lock:
+            for hub in self._uart_hubs.values(): hub.close()
+            self._uart_hubs.clear()
             for rid in list(self.res.claims):
                 self._close(rid, safe_value)
             self.res.claims.clear()
@@ -190,7 +222,7 @@ class HW:
         if rid in self._open:
             self._close_pin(rid, safe_value)
         elif h := self._handles.pop(rid, None):
-            h.close()
+            h.close(safe_value) if isinstance(h, PwmLine) else h.close()
         # i2c: шина общая и остаётся открытой; захват адреса уже снят
 
     def _close_pin(self, pin_id: str, safe_value: bool = False) -> None:

@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import threading
+import time
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -32,6 +33,7 @@ class LiveHub:
         self._last: dict[str, dict] = {}
         self._task: asyncio.Task | None = None
         self._last_leds: dict[str, dict] = {}
+        self._led_poll_at = 0.0
         self._sources: list = []  # () -> list[dict]: доп. сообщения (логи/статусы скриптов)
         self._handlers: dict[str, object] = {}  # type -> fn(msg): сообщения от клиента
         hw.watch(lambda pin_id, ev: self.mark(pin_id))
@@ -49,6 +51,7 @@ class LiveHub:
             self._dirty.update(pin_ids)
 
     def mark_leds(self) -> None:
+        self._led_poll_at = 0.0
         self._last_leds = {}  # форсировать рассылку LED (смена владельца)
 
     def led_states(self) -> dict[str, dict]:
@@ -122,6 +125,13 @@ class LiveHub:
         with self._lock:
             dirty, self._dirty = self._dirty, set()
             bench_dirty, self._bench_dirty = self._bench_dirty, set()
+        msgs = []
+        # Sources also checkpoint state: keep draining with a closed UI, but don't
+        # read ADC/sysfs solely for browser telemetry when no one is listening.
+        for drain in self._sources:
+            msgs += drain()
+        if not self.clients:
+            return
         # Аналоговые и PWM-пины меняются без событий — опрашиваем.
         dirty |= {pid for pid, c in self.hw.res.claims.items() if c.mode in ("adc", "soft_pwm")}
         changed = {}
@@ -129,7 +139,6 @@ class LiveHub:
             st = self.pin_state(pid)
             if self._last.get(pid) != st:
                 self._last[pid] = changed[pid] = st
-        msgs = []
         if changed:
             msgs.append({"type": "pins", "pins": changed})
         if bench_dirty and isinstance(self.hw.hal, BenchHAL):
@@ -137,15 +146,14 @@ class LiveHub:
             if None not in bench_dirty:
                 models = [m for m in models if m["id"] in bench_dirty]
             msgs.append({"type": "bench", "full": None in bench_dirty, "models": models})
-        if self.clients and self.board.leds:
+        if self.board.leds and time.monotonic() >= self._led_poll_at:
+            self._led_poll_at = time.monotonic() + 0.25
             # LED меняются триггерами ядра без событий — опрашиваем (2 файла sysfs на LED)
             leds = self.led_states()
             changed_leds = {k: v for k, v in leds.items() if self._last_leds.get(k) != v}
             if changed_leds:
                 self._last_leds.update(changed_leds)
                 msgs.append({"type": "leds", "leds": changed_leds})
-        for drain in self._sources:
-            msgs += drain()
         if msgs and self.clients:
             await self._send(msgs)
 

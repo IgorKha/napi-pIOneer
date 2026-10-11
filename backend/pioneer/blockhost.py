@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import heapq
+import queue
 import itertools
 import json
 import os
@@ -21,14 +22,20 @@ import sys
 import threading
 import time
 import traceback
+from pathlib import Path
+
+from pioneer.importscope import ImportScope
 
 from pioneer import block
 
 
-def load_file(path: str) -> dict[str, type[block.Node]]:
+def load_file(path: str, scope: ImportScope | None = None) -> dict[str, type[block.Node]]:
     """Выполнить файл блока и вернуть объявленные в нём ноды {id: класс}."""
     block.REGISTRY.clear()
-    runpy.run_path(path, run_name="pioneer_block")
+    path = str(Path(path).resolve())
+    scope = scope or ImportScope(Path(path).parent)
+    with scope.activate():
+        runpy.run_path(os.path.relpath(path, scope.root), run_name="pioneer_block")
     found = dict(block.REGISTRY)
     block.REGISTRY.clear()
     if not found:
@@ -58,8 +65,13 @@ def schema_main(path: str) -> None:
 class Host:
     def __init__(self, sock: socket.socket):
         self.sock = sock
+        self.requests = queue.SimpleQueue()
+        self.hardware_pending = {}
+        self.hardware_ids = itertools.count(1)
+        threading.Thread(target=self._receive,daemon=True).start()
         self.nodes: dict[str, block.Node] = {}
         self.files: dict[tuple[str, float], dict] = {}
+        self.scopes: dict[str, ImportScope] = {}
         self.lock = threading.RLock()
         self.send_lock = threading.Lock()
         self.timers: list = []
@@ -75,7 +87,8 @@ class Host:
     # ---- вызовы ноды
     def _run(self, node: block.Node, fn, *args) -> list:
         node._actions = []
-        fn(*args)
+        with node._scope.activate():
+            fn(*args)
         out, node._actions = node._actions, []
         return out
 
@@ -85,12 +98,14 @@ class Host:
             path = req["file"]
             key = (path, os.path.getmtime(path))
             if key not in self.files:
-                self.files[key] = load_file(path)
+                scope = self.scopes.setdefault(str(Path(path).parent), ImportScope(Path(path).parent))
+                self.files[key] = load_file(path, scope)
             cls = self.files[key].get(req["block"])
             if cls is None:
                 raise ValueError(f"в {os.path.basename(path)} нет блока {req['block']!r}")
             node = cls(req["node"], req.get("params", {}))
             node._host = self
+            node._scope = self.scopes[str(Path(path).parent)]
             self.nodes[req["node"]] = node
             return self._run(node, node.setup)
         node = self.nodes[req["node"]]
@@ -131,14 +146,34 @@ class Host:
             if actions:
                 self.send({"async": node.id, "actions": actions})
 
+
+    def _receive(self):
+        try:
+            for line in self.sock.makefile("r",encoding="utf-8"):
+                msg=json.loads(line)
+                if "hardware_reply" in msg:
+                    slot=self.hardware_pending.get(msg["hardware_reply"])
+                    if slot:slot[1]=msg;slot[0].set()
+                else:self.requests.put(msg)
+        finally:self.requests.put(None)
+
+    def hardware(self,node,op,args):
+        rid=next(self.hardware_ids);slot=[threading.Event(),None];self.hardware_pending[rid]=slot
+        try:
+            self.send({"hardware":rid,"node":node,"op":op,"args":args})
+            if not slot[0].wait(.8):raise TimeoutError("hardware RPC не ответил за 0.8 с")
+            msg=slot[1]
+            if not msg.get("ok"):raise ValueError(msg.get("error","ошибка железа"))
+            return msg.get("result")
+        finally:self.hardware_pending.pop(rid,None)
+
     def serve(self) -> None:
-        for line in self.sock.makefile("r", encoding="utf-8"):
-            req = json.loads(line)
+        while (req:=self.requests.get()) is not None:
             with self.lock:
                 try:
-                    self.send({"id": req["id"], "ok": True, "actions": self.handle(req)})
+                    self.send({"id":req["id"],"ok":True,"actions":self.handle(req)})
                 except Exception as e:
-                    self.send({"id": req["id"], "ok": False, "error": error_text(e)})
+                    self.send({"id":req["id"],"ok":False,"error":error_text(e)})
 
 
 def main() -> None:

@@ -24,6 +24,8 @@ from pioneer.engine.node import NodeError, NodeRegistry
 from pioneer.engine.ops import OpError, apply_ops
 from pioneer.engine.runtime import Engine, StartError
 from pioneer.hw import HW
+from pioneer.images import ImageStore
+from pioneer.state_store import StateStore
 
 log = logging.getLogger(__name__)
 LOG_LINES = 1000
@@ -36,6 +38,7 @@ class ProjectMeta:
     name: str
     description: str = ""
     autostart: bool = False
+    save_state: bool = False
     rev: int = 0
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
@@ -71,6 +74,9 @@ class ProjectManager:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.hw, self.registry = hw, registry
         self.engine = engine or Engine(hw, registry)
+        self.engine.images = ImageStore(data_dir)
+        self.state_store = StateStore(data_dir)
+        self._checkpoint_at = 0.0
         self.groups = None  # GroupManager (если подключены группы нод)
         self.engine.on_log = self._log
         self._lock = threading.RLock()
@@ -131,7 +137,7 @@ class ProjectManager:
         return meta
 
     def update_meta(self, pid: str, *, name: str | None = None, description: str | None = None,
-                    autostart: bool | None = None) -> ProjectMeta:
+                    autostart: bool | None = None, save_state: bool | None = None) -> ProjectMeta:
         with self._lock:
             meta, graph = self._read(pid)
             if name is not None:
@@ -140,6 +146,10 @@ class ProjectManager:
                 meta.description = description
             if autostart is not None:
                 meta.autostart = autostart
+            if save_state is not None:
+                meta.save_state = save_state
+                if not save_state:
+                    (self.state_store.dir / f"{pid}.json").unlink(missing_ok=True)
             meta.updated = time.time()
             self._write(meta, graph)
         return meta
@@ -148,6 +158,7 @@ class ProjectManager:
         self._read(pid)
         self.stop(pid)
         self._path(pid).unlink(missing_ok=True)
+        (self.state_store.dir / f"{pid}.json").unlink(missing_ok=True)
         with self._lock:
             self._logs.pop(pid, None)
             self._status.pop(pid, None)
@@ -225,7 +236,8 @@ class ProjectManager:
         self._logs.setdefault(pid, collections.deque(maxlen=LOG_LINES))
         try:
             flat, aliases, _ = self._flat(graph)
-            rt = self.engine.start_project(pid, meta.name, flat, meta.rev, aliases)
+            saved = self.state_store.load(pid, flat, self.registry) if meta.save_state else {}
+            rt = self.engine.start_project(pid, meta.name, flat, meta.rev, aliases, saved)
             if self.groups is not None:
                 rt.group_revs = self.groups.used_revs(graph)
         except (StartError, ValueError) as e:
@@ -236,6 +248,7 @@ class ProjectManager:
         return self.status(pid)
 
     def stop(self, pid: str) -> dict:
+        self.checkpoint(pid)
         if self.engine.stop_project(pid):
             self._set_status(pid, Status("stopped"))
             self._pins_changed()
@@ -259,7 +272,23 @@ class ProjectManager:
                     log.error("автозапуск проекта %s: %s", m["id"], e)
 
     def close(self) -> None:
+        self.stop_all()
         self.engine.close()
+
+    def checkpoint(self, pid: str) -> None:
+        try:
+            if not self._read(pid)[0].save_state:
+                return
+            def snapshot():
+                rt = self.engine.runtimes.get(pid)
+                return self.state_store.snapshot(rt) if rt else None
+            records = self.engine.call(snapshot)
+            if records is not None:
+                with self._lock:
+                    if self._read(pid)[0].save_state:
+                        self.state_store.save(pid, records)  # file IO never blocks the engine thread
+        except (OSError, ValueError, ProjectError) as e:
+            self._log(pid, {"t": time.time(), "level": "error", "node": None, "text": f"состояние не сохранено: {e}"})
 
     def _fail(self, pid: str, error: str) -> None:
         self._log(pid, {"t": time.time(), "level": "error", "node": None, "text": f"не запущен: {error}"})
@@ -336,6 +365,10 @@ class ProjectManager:
 
     def drain(self) -> list[dict]:
         """Сообщения для WS: лог, статусы, live-значения сокетов (≤ 20 Гц — частота LiveHub)."""
+        if time.monotonic() >= self._checkpoint_at:
+            self._checkpoint_at = time.monotonic() + 10
+            for pid in list(self.engine.runtimes):
+                self.checkpoint(pid)
         msgs = []
         with self._lock:
             for pid, lines in self._pending_logs.items():

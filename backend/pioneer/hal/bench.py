@@ -265,6 +265,18 @@ class BenchHAL(HAL):
         with self._lock:
             return _Output(self, self._claim(gpio), initial)
 
+    def open_hw_pwm(self, interface, board):
+        from pioneer.hal.hardware_pwm import settings
+        gpio = board.pin(next(iter(interface.pins))).gpio
+        line = self.open_pwm(gpio)
+        def set_hw(freq=None, duty=None):
+            f, d = line.freq if freq is None else freq, line.duty if duty is None else duty
+            settings(f, d)
+            line.freq, line.duty = f, d
+            self._set_pwm(line.pin, f, d)
+        line.set = set_hw
+        return line
+
     def open_pwm(self, gpio: GpioRef, *, freq: float = 100.0, duty: float = 0.0) -> PwmLine:
         with self._lock:
             pin = self._claim(gpio)
@@ -312,6 +324,7 @@ class BenchHAL(HAL):
         return {"on": on, "trigger": st["trigger"], "triggers": LED_TRIGGERS}
 
     def close(self) -> None:
+        for model in self.models.values(): model.detach()
         self._queue.put(None)
 
     # ---- для моделей
@@ -383,9 +396,14 @@ class BenchHAL(HAL):
                 raise BenchError(f"модель {model_id} уже есть")
             try:
                 model = cls(self, model_id, **config)
-            except TypeError as e:
+            except (TypeError, ValueError, OSError) as e:
                 raise BenchError(f"{kind}: {e}") from e
-            model.attach()
+            try: model.attach()
+            except (ValueError, OSError) as e:
+                model.detach()
+                raise BenchError(f"{kind}: {e}") from e
+            except BaseException:
+                model.detach(); raise
             self.models[model_id] = model
         self._save()
         for cb in self._listeners:

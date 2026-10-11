@@ -32,7 +32,7 @@ def test_reference(board):
     out_pins = {s["id"]: s for s in syms["Output"]["support"]}
     assert out_pins["J9-7"]["available"] and not out_pins["J9-11"]["available"]  # J9-11 отдан I2C3
     assert {s["id"] for s in syms["Adc"]["support"]} == {"J9-26", "J10-3"}
-    assert [g["id"] for g in ref["guides"]] == ["start", "recipes", "blocks", "hardware", "errors"]
+    assert [g["id"] for g in ref["guides"]] == ["start", "projects", "recipes", "workspace", "blocks", "ai", "network", "sensors", "system", "hardware", "drivers", "modules", "errors"]
     assert len(ref["nodes"]) >= 30
 
 
@@ -106,3 +106,15 @@ def test_block_guide_examples_valid(tmp_path):
         f.write_text(code)
         r = extract_schema(f)
         assert r["ok"], r
+
+
+def test_spec_custom_block_matches_public_sdk(tmp_path):
+    import re
+    from pioneer.userblocks import extract_schema
+    source=(DOCS_DIR.parent/'spec.md').read_text()
+    examples=[c for c in re.findall(r'```python\n(.*?)```',source,re.S) if 'from pioneer.block import' in c]
+    assert examples
+    for i,code in enumerate(examples):
+        path=tmp_path/f'spec{i}.py';path.write_text(code)
+        result=extract_schema(path)
+        assert result['ok'],result

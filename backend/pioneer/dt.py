@@ -100,6 +100,8 @@ def read_dt(base: Path = DEFAULT_DT) -> DeviceTree | None:
                 quads = _u32s(group.get("rockchip,pins", b""))
                 for i in range(0, len(quads) - 3, 4):
                     bank, pin, mux = quads[i], quads[i + 1], quads[i + 2]
+                    if mux == 0 and label.startswith("gpio") and phandles.get(ph, "").startswith("/pinctrl/pioneer-gpio-bias/"):
+                        continue  # default electrical bias does not reserve a GPIO consumer
                     dt.claims[(bank, pin)].append(DtUser(path, label, "pinctrl", mux))
         for prop, raw in p.items():
             if not (prop == "gpios" or prop.endswith("-gpios")):
