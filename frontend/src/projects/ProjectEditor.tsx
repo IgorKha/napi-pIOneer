@@ -115,6 +115,8 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
     load();
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => { if (socket) load(); }, [socket]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // live-снимок при открытии запущенного проекта (дальше — дельты по WS)
   useEffect(() => {
     return loadSnapshot(() => api.projectLive(id), s => resetLive(id, s), () => {});
