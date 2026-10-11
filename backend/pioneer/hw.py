@@ -63,8 +63,13 @@ class HW:
         """Захватить пин и открыть линию. listener_key — несколько слушателей фронтов у одного
         владельца (ноды проекта): ключ вида "<owner>#<нода>", снимаются вместе с владельцем."""
         with self._lock:
+            previous = self.res.claims.get(pin_id)
+            was_owner = previous is not None and owner in previous.owners
+            previous_mode = previous.mode if was_owner else None
             self.res.claim(owner, owner_name, pin_id, mode)
             cur = self._open.get(pin_id)
+            old = cur
+            old_value = bool(cur.line.read()) if cur and cur.mode == "gpio_out" else False
             if cur and cur.mode != mode:  # единственный владелец сменил режим
                 self._close_pin(pin_id)
                 cur = None
@@ -72,11 +77,21 @@ class HW:
                 # Разделяемый вход открывается с debounce первого захватившего.
                 try:
                     cur = self._open[pin_id] = self._open_line(pin_id, mode, initial, debounce_ms)
-                except LineBusy as e:  # держит ядро или другой процесс — понятная ошибка
-                    self.res.release(owner, pin_id)
-                    raise ResourceConflict(f"{pin_id} {e.strerror or e}") from e
-                except Exception:
-                    self.res.release(owner, pin_id)
+                except Exception as e:
+                    if not was_owner:
+                        self.res.release(owner, pin_id)
+                    else:
+                        self.res.claim(owner, owner_name, pin_id, previous_mode)
+                        if old is not None:
+                            try:
+                                restored = self._open[pin_id] = self._open_line(pin_id, old.mode, old_value, debounce_ms)
+                                restored.listeners, restored.safe = old.listeners, old.safe
+                                if old.mode == "soft_pwm":
+                                    restored.line.set(old.line.freq, old.line.duty)
+                            except Exception as restore_error:
+                                e.add_note(f"не удалось восстановить прежнюю линию: {restore_error}")
+                    if isinstance(e, LineBusy):
+                        raise ResourceConflict(f"{pin_id} {e.strerror or e}") from e
                     raise
             if mode == "gpio_out":
                 cur.safe = bool(safe)

@@ -238,3 +238,16 @@ def test_review_13_webhook_rejects_query_token_and_bounds_stream(monkeypatch):
     request.headers={"x-pioneer-token":"secret"};request.stream=stream
     with pytest.raises(HTTPException) as error:asyncio.run(hooks.hook("test",request))
     assert error.value.status_code==413 and len(reads)==5
+
+
+def test_review_14_failed_mode_switch_retains_owner_and_restores_input(hw, monkeypatch):
+    hw.acquire("owner","Owner","J9-7","gpio_in")
+    def fail(*args,**kwargs):raise OSError("HAL cannot open output")
+    monkeypatch.setattr(hw.hal,"open_output",fail)
+    with pytest.raises(OSError):hw.acquire("owner","Owner","J9-7","gpio_out")
+    claim=hw.res.claims["J9-7"]
+    assert claim.mode=="gpio_in" and "owner" in claim.owners
+    assert hw._open["J9-7"].mode=="gpio_in" and hw.value("J9-7") is not None
+    with pytest.raises(OSError):hw.acquire("new","New","J9-12","gpio_out")
+    assert "J9-12" not in hw.res.claims
+    hw.release("owner")
