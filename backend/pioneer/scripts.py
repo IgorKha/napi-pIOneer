@@ -117,8 +117,8 @@ class _Runner:
 
     def _wait(self) -> None:
         code = self.proc.wait()
-        # Освобождаем всё, что держал скрипт: выходы — в LOW, порты закрыты.
-        self.mgr.hw.release(self.owner, safe_value=False)
+        # Выходы переходят в заданный безопасный уровень, порты закрываются.
+        self.mgr.hw.release(self.owner)
         self.sock.close()
         if self._stopping or code in (0, -signal.SIGTERM):
             st = Status("stopped" if self._stopping else "exited", exit_code=code)
@@ -169,7 +169,7 @@ class _Runner:
                 raise ValueError("драйвер DHT22 не настроен в core")
             return hw.drivers.read()
         if op == "acquire":
-            hw.acquire(o, n, a["pin"], a["mode"], initial=a.get("initial", False),
+            hw.acquire(o, n, a["pin"], a["mode"], initial=a.get("initial", False), safe=a.get("safe", False),
                        debounce_ms=a.get("debounce_ms", 0),
                        on_edge=self._edge if a["mode"] == "gpio_in" else None)
             self.mgr.on_pins(a["pin"])

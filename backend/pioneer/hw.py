@@ -24,6 +24,7 @@ class _Open:
     mode: RuntimeMode
     line: InputLine | OutputLine | PwmLine | None = None
     listeners: dict[str, PinListener] = field(default_factory=dict)
+    safe: bool = False
 
 
 class I2CDevice:
@@ -57,7 +58,7 @@ class HW:
 
     # ---- пины
     def acquire(self, owner: str, owner_name: str, pin_id: str, mode: RuntimeMode, *,
-                initial: bool = False, debounce_ms: int = 0,
+                initial: bool = False, safe: bool = False, debounce_ms: int = 0,
                 on_edge: PinListener | None = None, listener_key: str | None = None) -> None:
         """Захватить пин и открыть линию. listener_key — несколько слушателей фронтов у одного
         владельца (ноды проекта): ключ вида "<owner>#<нода>", снимаются вместе с владельцем."""
@@ -77,6 +78,8 @@ class HW:
                 except Exception:
                     self.res.release(owner, pin_id)
                     raise
+            if mode == "gpio_out":
+                cur.safe = bool(safe)
             if on_edge:
                 cur.listeners[listener_key or owner] = on_edge
 
@@ -171,7 +174,7 @@ class HW:
             return self._handles[rid]
 
     # ---- освобождение
-    def release(self, owner: str, resource: str | None = None, *, safe_value: bool = False) -> None:
+    def release(self, owner: str, resource: str | None = None, *, safe_value: bool | None = None) -> None:
         with self._lock:
             for ctl, hub in list(self._uart_hubs.items()):
                 if resource is None or resource.split(":")[0] == ctl:
@@ -185,7 +188,7 @@ class HW:
                     for key in [k for k in o.listeners if k == owner or k.startswith(owner + "#")]:
                         del o.listeners[key]
 
-    def close_all(self, safe_value: bool = False) -> None:
+    def close_all(self, safe_value: bool | None = None) -> None:
         with self._lock:
             for hub in self._uart_hubs.values(): hub.close()
             self._uart_hubs.clear()
@@ -218,17 +221,18 @@ class HW:
         for cb in [*(o.listeners.values() if o else ()), *self._watchers]:
             cb(pin_id, ev)
 
-    def _close(self, rid: str, safe_value: bool) -> None:
+    def _close(self, rid: str, safe_value: bool | None) -> None:
         if rid in self._open:
             self._close_pin(rid, safe_value)
         elif h := self._handles.pop(rid, None):
-            h.close(safe_value) if isinstance(h, PwmLine) else h.close()
+            h.close(bool(safe_value)) if isinstance(h, PwmLine) else h.close()
         # i2c: шина общая и остаётся открытой; захват адреса уже снят
 
-    def _close_pin(self, pin_id: str, safe_value: bool = False) -> None:
+    def _close_pin(self, pin_id: str, safe_value: bool | None = None) -> None:
         o = self._open.pop(pin_id, None)
         if o is None or o.line is None:
             return
+        safe_value = o.safe if safe_value is None else safe_value
         if isinstance(o.line, PwmLine):
             o.line.close(safe_value)
             return

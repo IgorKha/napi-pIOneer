@@ -105,13 +105,14 @@ class Output:
         только модулем с драйвером, не напрямую.
 
     Example:
+        # Для реле с активным LOW: Output("J9-7", initial=True, safe=True)
         led = Output("J9-7")
         led.on()
     """
 
-    def __init__(self, pin: str, initial: bool = False):
+    def __init__(self, pin: str, initial: bool = False, safe: bool = False):
         self.pin, self._value = pin, bool(initial)
-        _rpc.call("acquire", pin=pin, mode="gpio_out", initial=self._value)
+        _rpc.call("acquire", pin=pin, mode="gpio_out", initial=self._value, safe=bool(safe))
 
     @property
     def value(self) -> bool:

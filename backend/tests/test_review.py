@@ -46,3 +46,29 @@ def test_review_2_stopped_submission_rejects_immediately(client, monkeypatch):
     ctx = RequestContext();ctx.on_complete.append(lambda c:done.set())
     original(p.id, Origin("remote", "http"), lambda:pytest.fail("must not execute"), ctx=ctx)
     assert done.wait(1) and ctx.done and ctx.rejected
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_review_3_script_output_safe_high(hw, tmp_path, monkeypatch, crash):
+    from pioneer.scripts import ScriptManager
+    from conftest import wait_for
+    writes = []
+    original = hw.hal.open_output
+    def output(*args, **kwargs):
+        line = original(*args, **kwargs);write = line.write
+        line.write = lambda value:(writes.append(value),write(value))
+        return line
+    monkeypatch.setattr(hw.hal, "open_output", output)
+    sm = ScriptManager(tmp_path, hw)
+    try:
+        code = 'from pioneer.sdk import Output, run\nOutput("J9-7", initial=True, safe=True).off()\n'
+        code += 'raise RuntimeError("test crash")\n' if crash else 'run()\n'
+        sid = sm.create("relay", code).id;sm.start(sid)
+        if crash: assert wait_for(lambda:sm.status(sid).state == "error", 5)
+        else:
+            assert wait_for(lambda:"J9-7" in hw.res.claims, 5)
+            sm.stop(sid)
+        assert writes[-1] is True and not hw.res.claims
+        hw.acquire("other", "other", "J9-7", "gpio_out", safe=True)
+        hw.close_all();assert writes[-1] is True
+    finally:sm.stop_all()

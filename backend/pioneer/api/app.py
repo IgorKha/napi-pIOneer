@@ -109,7 +109,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         pm.close()
         sm.stop_all()
         await live.stop()
-        app.state.hw.close_all(safe_value=False)
+        app.state.hw.close_all()
         hal.close()
 
     app = FastAPI(title="napi-pioneer", version=__version__, lifespan=lifespan,
