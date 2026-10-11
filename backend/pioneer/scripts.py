@@ -81,6 +81,8 @@ class _Runner:
         self.root = mgr.tree(meta.id).root
         self.owner = f"script:{meta.id}"
         self.owner_name = f"скрипт «{meta.name}»"
+        from pioneer.compat.hardware import CircuitPythonHW
+        self.compat = CircuitPythonHW(mgr.hw, self.owner, self.owner_name)
         self.handles: dict[int, object] = {}
         self._next_h = 1
         self._send_lock = threading.Lock()
@@ -130,6 +132,7 @@ class _Runner:
         except OSError:
             pass
         self._edge_thread.join()
+        self.compat.close()
         self.mgr.hw.release(self.owner)
         self.sock.close()
         if self._stopping or code in (0, -signal.SIGTERM):
@@ -191,6 +194,8 @@ class _Runner:
 
     def _handle(self, op: str, **a):
         hw, o, n = self.mgr.hw, self.owner, self.owner_name
+        if op == "circuitpython":
+            return self.compat.call(**a)
         if op == "dht22_read":
             if hw.drivers is None:
                 raise ValueError("драйвер DHT22 не настроен в core")

@@ -5,6 +5,7 @@ type Plan={hash:string;source:string;diff:string;blockers:string[];compiled:bool
 export function GpioBiasSection({onError}:{onError:(m:string)=>void}){
   const [board,setBoard]=useState<Board>(),[values,setValues]=useState<Record<string,string>>({});
   const [pin,setPin]=useState('J9-7'),[bias,setBias]=useState('up'),[plan,setPlan]=useState<Plan>(),[busy,setBusy]=useState(false),[backup,setBackup]=useState('');
+  useEffect(()=>{const raw=sessionStorage.getItem('pioneer-pull-plan');if(raw){sessionStorage.removeItem('pioneer-pull-plan');try{const p=JSON.parse(raw);setPin(p.pin);setBias(p.bias);}catch{/* Ignore an outdated editor hint. */}}},[]);
   useEffect(()=>{api.board().then(setBoard,e=>onError(e.message));driverRequest('/drivers/gpio-bias').then(r=>setValues(r.values),e=>onError(e.message));},[onError]);
   async function run(fn:()=>Promise<void>){setBusy(true);try{await fn();}catch(e){onError((e as Error).message);}finally{setBusy(false);}}
   function clear(){setPlan(undefined);setBackup('');}

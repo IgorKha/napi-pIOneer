@@ -1,0 +1,10 @@
+Health: {'ok': True, 'version': '0.0.1', 'hal': 'linux'}
+Catalog keys: ['drivers', 'offline', 'job', 'profiles']
+Profiles: ['bme280', 'sht4x', 'ssd1306', 'pca9685', 'lcd']
+Official example retained: 748cefed
+Job: None
+Logout: {'authenticated': False}
+               total        used        free      shared  buff/cache   available
+Mem:             414         282          34           5         113         132
+Swap:              0           0           0
+active

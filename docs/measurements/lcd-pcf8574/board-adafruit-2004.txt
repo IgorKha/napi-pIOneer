@@ -1,0 +1,12 @@
+pcf8574 done
+charlcd done
+Script 9a55664b {'state': 'exited', 'pid': None, 'started': None, 'exit_code': 0, 'error': None, 'edge_dropped': 0}
+DDRAM 0x00: b'Napi-C Pioneer      '
+DDRAM 0x40: b'Adafruit PCF8574    '
+DDRAM 0x14: b'CircuitPython       '
+DDRAM 0x54: b'20x4 RPC OK         '
+Versions: {"adafruit-blinka": "99.0.0", "adafruit-circuitpython-74hc595": "1.5.2", "adafruit-circuitpython-busdevice": "5.2.17", "adafruit-circuitpython-charlcd": "3.5.7", "adafruit-circuitpython-connectionmanager": "3.1.8", "adafruit-circuitpython-mcp230xx": "2.6.2", "adafruit-circuitpython-pcf8574": "1.0.17", "adafruit-circuitpython-requests": "4.1.17", "adafruit-circuitpython-typing": "1.12.3", "adafruit-platformdetect": "99.0.0", "typing-extensions": "4.16.0"}
+PASS: actual Adafruit wheels → worker → CircuitPython RPC → HW → LCD2004; all 4 rows verified
+Example script retained for the user; backlight on. Visual layout still needs user confirmation.
+
+User confirmation: all four lines are straight, without offset.

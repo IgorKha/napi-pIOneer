@@ -55,13 +55,22 @@ function findDoc(word: string): { d: SdkSymbol | SdkMember; owner?: string } | n
 }
 
 monaco.languages.registerCompletionItemProvider("python", {
-  triggerCharacters: ['"', "'"],
+  triggerCharacters: ['"', "'", "."],
   provideCompletionItems(model, position) {
     const before = model.getValueInRange({
       startLineNumber: position.lineNumber, startColumn: 1,
       endLineNumber: position.lineNumber, endColumn: position.column,
     });
     const word = model.getWordUntilPosition(position);
+    if (/\bboard\.[\w]*$/.test(before) && currentBoard) {
+      const range = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, position.column);
+      const suggestions = currentBoard.pins.filter(p => p.gpio || p.adc_channel !== null).flatMap(p =>
+        [p.id.replaceAll("-", "_"), ...(p.name ? [p.name] : [])].map(name => ({
+          label: name, insertText: name, range, kind: monaco.languages.CompletionItemKind.Variable,
+          detail: `${p.id} · ${p.name ?? "ADC"} · ${p.claim ? "занят: " + Object.values(p.claim.owners).join(", ") : p.function ?? "свободен"}`,
+        })));
+      return { suggestions };
+    }
     const pin = PIN_CTOR.exec(before);
     if (pin && currentBoard) {
       const adc = pin[1] === "Adc";

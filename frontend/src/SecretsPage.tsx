@@ -20,9 +20,10 @@ export function SecretsPage({ onError, section = "mqtt" }: { onError: (msg: stri
     <div className="flex min-h-0 w-full text-sm">
       <nav aria-label="Разделы настроек" className="w-48 shrink-0 border-r border-line bg-panel p-3">
         <h1 className="mb-3 px-2 font-semibold">Настройки</h1>
-        {([["mqtt", "MQTT"], ["ai", "AI"], ["secrets", "Секреты"], ["drivers", "Драйверы"], ["modules", "Модули"], ["system", "Система"]] as const).map(([key, title]) =>
+        {([["mqtt", "MQTT"], ["ai", "AI"], ["secrets", "Секреты"], ["system", "Система"]] as const).map(([key, title]) =>
           <a key={key} href={`#/secrets/${key}`} aria-current={section === key ? "page" : undefined}
             className={`mb-1 block rounded px-3 py-2 ${section === key ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>{title}</a>)}
+        <a className="mt-3 block px-3 py-2 text-accent" href="#/devices">Устройства и драйверы →</a>
       </nav>
       <div className="min-w-0 flex-1 overflow-auto p-8"><div className="max-w-xl">
       {section === "mqtt" && <MqttSection onError={onError} secretNames={names} />}

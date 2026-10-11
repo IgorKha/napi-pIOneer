@@ -57,6 +57,12 @@ class HardwareRPC:
             raise ValueError("нет активной ноды блока")
         hw = self.rt.hw.hw
         owner, name = self.rt.hw.owner, self.rt.hw.owner_name
+        if op == "circuitpython":
+            from pioneer.compat.hardware import CircuitPythonHW
+
+            if nid not in self.rt._compat_hardware:
+                self.rt._compat_hardware[nid] = CircuitPythonHW(hw, owner + ":" + nid, name)
+            return self.rt._compat_hardware[nid].call(**a)
         if op == "i2c_open":
             handle = len(self.handles) + 1
             self.handles[(nid, handle)] = hw.i2c(owner, name, a["interface"], int(a["addr"]))

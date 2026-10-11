@@ -161,6 +161,7 @@ class ProjectRuntime:
         self.started: float | None = None
         self.errors: dict[str, _NodeError] = {}
         self.views: dict[str, dict] = {}
+        self._compat_hardware = {}
         self._blockhost = None  # процесс Python-блоков проекта (по требованию)
         self.block_files: dict[str, float] = {}  # файл блока -> mtime при старте («граф изменён»)
         # live (читается из потока LiveHub)
@@ -240,6 +241,9 @@ class ProjectRuntime:
         if self._blockhost is not None:
             self._blockhost.close()
             self._blockhost = None
+        for session in self._compat_hardware.values():
+            session.close()
+        self._compat_hardware.clear()
         self.engine.hw.release(self.owner)
 
     # ---- волна

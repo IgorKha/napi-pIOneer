@@ -18,6 +18,10 @@ class ImportScope:
         from pioneer.dependencies import site_for
 
         self.site = site_for(self.root)
+        from pioneer.compat.circuitpython import check_lock, paths
+
+        check_lock(self.root)
+        self.compat_paths = paths(self.root)
         self.modules: dict = {}
         # Import paths stay fixed for this worker; resolving every module on each
         # callback is expensive on the board filesystem. A restart resets the cache.
@@ -43,6 +47,7 @@ class ImportScope:
         shadowed = {name: sys.modules[name] for name in self.modules if name in sys.modules}
         sys.modules.update(self.modules)
         sys.path = [
+            *self.compat_paths,
             str(self.root),
             str(self.site),
             str(self.lib),

@@ -9,6 +9,8 @@ config модели = kwargs конструктора; сохраняется в
 from __future__ import annotations
 
 import random
+import math
+import struct
 import threading
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -319,3 +321,227 @@ class SpiLoopback(Model):
 MODEL_KINDS: dict[str, type[Model]] = {
     m.kind: m for m in (Level, Wire, Voltage, Button, Led, I2CRegs, UartLoopback, SpiLoopback)
 }
+
+BUS_PARAMS = {"bus": {"type": "int", "default": 1}, "addr": {"type": "int"}}
+
+
+class Registers(Model):
+    def __init__(self, bench, model_id, *, bus=1, addr=0x76, **config):
+        super().__init__(bench, model_id, bus=bus, addr=addr, **config)
+        self.regs, self.ptr = bytearray(256), 0
+
+    def attach(self):
+        self.bench.attach_i2c(self, self.config["bus"], self.config["addr"])
+
+    def i2c_write(self, bus, addr, data):
+        if data:
+            self.ptr = data[0]
+            for b in data[1:]:
+                self.regs[self.ptr] = b
+                self.ptr = (self.ptr + 1) % 256
+            self.changed()
+
+    def i2c_read(self, bus, addr, n):
+        data = bytes(self.regs[(self.ptr + i) % 256] for i in range(n))
+        self.ptr = (self.ptr + n) % 256
+        return data
+
+
+class BME280(Registers):
+    kind, title = "bme280", "BME280 (Adafruit)"
+    params = {
+        **BUS_PARAMS,
+        "addr": {"type": "int", "default": 0x76},
+        "temperature": {"type": "float", "default": 25},
+        "humidity": {"type": "float", "default": 50},
+        "pressure": {"type": "float", "default": 1013.25},
+    }
+    actions = ["set"]
+
+    def __init__(
+        self, bench, model_id, *, bus=1, addr=0x76, temperature=25, humidity=50, pressure=1013.25
+    ):
+        super().__init__(
+            bench,
+            model_id,
+            bus=bus,
+            addr=addr,
+            temperature=temperature,
+            humidity=humidity,
+            pressure=pressure,
+        )
+        self.regs[0xD0] = 0x60
+        self.regs[0x88:0xA0] = struct.pack("<HhhHhhhhhhhh", 20000, 25600, 0, 32768, *([0] * 8))
+        self.regs[0xE1:0xE8] = struct.pack("<hBbBbb", 1024, 0, 0, 0, 0, 0)
+        self.action("set", {"temperature": temperature, "humidity": humidity, "pressure": pressure})
+
+    def action(self, name, payload):
+        if name != "set":
+            return super().action(name, payload)
+        values = dict(self.config)
+        for key, lower, upper in (
+            ("temperature", -40, 85),
+            ("humidity", 0, 100),
+            ("pressure", 300, 1100),
+        ):
+            value = float(payload.get(key, values[key]))
+            if not math.isfinite(value) or not lower <= value <= upper:
+                raise ValueError(f"{key}: {lower}…{upper}")
+            values[key] = value
+        self.config.update(values)
+        t = round(320000 + values["temperature"] * 3276.8)
+        p = round(1048576 - values["pressure"] * 524.288)
+        self.regs[0xF7:0xFA] = (p << 4).to_bytes(3, "big")
+        self.regs[0xFA:0xFD] = (t << 4).to_bytes(3, "big")
+        self.regs[0xFD:0xFF] = round(values["humidity"] * 64).to_bytes(2, "big")
+        self.changed()
+
+    def state(self):
+        return {k: self.config[k] for k in ("temperature", "humidity", "pressure")}
+
+
+class SHT4x(Model):
+    kind, title = "sht4x", "SHT4x (Adafruit)"
+    params = {
+        **BUS_PARAMS,
+        "addr": {"type": "int", "default": 0x44},
+        "temperature": {"type": "float", "default": 25},
+        "humidity": {"type": "float", "default": 50},
+    }
+    actions = ["set"]
+
+    def __init__(self, bench, model_id, *, bus=1, addr=0x44, temperature=25, humidity=50):
+        super().__init__(
+            bench, model_id, bus=bus, addr=addr, temperature=temperature, humidity=humidity
+        )
+        self.command = 0xFD
+        self.action("set", {"temperature": temperature, "humidity": humidity})
+
+    def attach(self):
+        self.bench.attach_i2c(self, self.config["bus"], self.config["addr"])
+
+    def i2c_write(self, bus, addr, data):
+        if data:
+            self.command = data[0]
+
+    @staticmethod
+    def crc(data):
+        crc = 0xFF
+        for value in data:
+            crc ^= value
+            for _ in range(8):
+                crc = ((crc << 1) ^ (0x31 if crc & 0x80 else 0)) & 0xFF
+        return crc
+
+    def i2c_read(self, bus, addr, n):
+        if self.command == 0x89:
+            values = (0x1234, 0x5678)
+        else:
+            values = (
+                round((self.config["temperature"] + 45) * 65535 / 175),
+                round((self.config["humidity"] + 6) * 65535 / 125),
+            )
+        result = b""
+        for value in values:
+            pair = value.to_bytes(2, "big")
+            result += pair + bytes([self.crc(pair)])
+        return (result + bytes(max(0, n - 6)))[:n]
+
+    def action(self, name, payload):
+        if name != "set":
+            return super().action(name, payload)
+        for key, low, high in (("temperature", -40, 125), ("humidity", 0, 100)):
+            value = float(payload.get(key, self.config[key]))
+            if not math.isfinite(value) or not low <= value <= high:
+                raise ValueError(f"{key}: {low}…{high}")
+        self.config.update(
+            {k: float(v) for k, v in payload.items() if k in ("temperature", "humidity")}
+        )
+        self.changed()
+
+    def state(self):
+        return {k: self.config[k] for k in ("temperature", "humidity")}
+
+
+class PCA9685(Registers):
+    kind, title = "pca9685", "PCA9685 (Adafruit)"
+    params = {**BUS_PARAMS, "addr": {"type": "int", "default": 0x40}}
+
+    def __init__(self, bench, model_id, *, bus=1, addr=0x40):
+        super().__init__(bench, model_id, bus=bus, addr=addr)
+        self.regs[0xFE] = 0x1E
+
+    def state(self):
+        channels = []
+        for channel in range(16):
+            on, off = struct.unpack_from("<HH", self.regs, 6 + channel * 4)
+            duty = 0 if off & 4096 else 65535 if on & 4096 else ((off - on) & 4095) << 4
+            channels.append(duty)
+        return {"frequency": 25000000 / (4096 * (self.regs[0xFE] + 1)), "channels": channels}
+
+
+class SSD1306(Model):
+    kind, title = "ssd1306", "SSD1306 OLED (Adafruit)"
+    params = {
+        **BUS_PARAMS,
+        "addr": {"type": "int", "default": 0x3C},
+        "width": {"type": "int", "default": 128},
+        "height": {"type": "int", "default": 64},
+    }
+
+    def __init__(self, bench, model_id, *, bus=1, addr=0x3C, width=128, height=64):
+        if width not in (64, 128) or height not in (32, 64):
+            raise ValueError("SSD1306 width 64/128, height 32/64")
+        super().__init__(bench, model_id, bus=bus, addr=addr, width=width, height=height)
+        self.buffer = bytearray(width * height // 8)
+        self.commands = []
+        self.pending = []
+        self.columns, self.pages, self.position = (0, width - 1), (0, height // 8 - 1), 0
+
+    def attach(self):
+        self.bench.attach_i2c(self, self.config["bus"], self.config["addr"])
+
+    def i2c_write(self, bus, addr, data):
+        if not data:
+            return
+        if data[0] & 0x40:
+            width = self.config["width"]
+            span = self.columns[1] - self.columns[0] + 1
+            for value in data[1:]:
+                page = self.pages[0] + self.position // span
+                col = self.columns[0] + self.position % span
+                index = page * width + col
+                if 0 <= index < len(self.buffer):
+                    self.buffer[index] = value
+                self.position = (self.position + 1) % (span * (self.pages[1] - self.pages[0] + 1))
+            self.changed()
+        else:
+            for value in data[1:]:
+                if self.pending:
+                    self.pending.append(value)
+                    needed = 3 if self.pending[0] in (0x21, 0x22) else 2
+                    if len(self.pending) == needed:
+                        if self.pending[0] == 0x21:
+                            self.columns = tuple(self.pending[1:])
+                            self.position = 0
+                        if self.pending[0] == 0x22:
+                            self.pages = tuple(self.pending[1:])
+                            self.position = 0
+                        self.pending = []
+                elif value in (0x21, 0x22, 0x20, 0x81, 0x8D, 0xA8, 0xD3, 0xD5, 0xD9, 0xDA, 0xDB):
+                    self.pending = [value]
+            self.commands = (self.commands + list(data[1:]))[-64:]
+
+    def i2c_read(self, bus, addr, n):
+        return bytes(n)
+
+    def state(self):
+        return {
+            "width": self.config["width"],
+            "height": self.config["height"],
+            "frame": self.buffer.hex(),
+            "lit_pixels": sum(v.bit_count() for v in self.buffer),
+        }
+
+
+MODEL_KINDS.update({m.kind: m for m in (BME280, SHT4x, SSD1306, PCA9685)})

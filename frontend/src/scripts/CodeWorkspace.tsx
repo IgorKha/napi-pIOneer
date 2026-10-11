@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { api, codeRequest, codeUrl, type Board, type CodeFile } from "../api";
+import { DeviceWizard, installDriver } from "../AdafruitPage";
 import { CodeEditor } from "./CodeEditor";
 
 export interface WorkspaceHandle { save: () => Promise<void>; refreshFile: (path: string) => Promise<void> }
@@ -14,7 +15,24 @@ import { saveDrafts, type Draft } from "./saveDrafts";
 export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWorkspace(
   { kind, id, board, onError, onSaved, onDirty, onRun, location }, ref,
 ) {
+  const [wizard, setWizard] = useState(false);
   const [definition, setDefinition] = useState<{path:string;line:number}>();
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {e.preventDefault();setWizard(true);}};
+    const fix = (event: Event) => {
+      const {fix,scope}=(event as CustomEvent).detail;
+      if(scope.kind!==kind || scope.id!==id)return;
+      if(String(fix).startsWith("install:")) installDriver(fix.slice(8),()=>{}).then(()=>setWizard(true),(e:Error)=>onError(e.message));
+      else if(String(fix).startsWith("pull:")) {
+        const [,pin,bias]=String(fix).split(":");
+        sessionStorage.setItem("pioneer-pull-plan",JSON.stringify({pin,bias}));
+        window.location.hash="#/devices/drivers";
+      } else window.location.hash="#/board";
+    };
+    window.addEventListener("pioneer-device-fix",fix);
+    window.addEventListener("keydown", key, true);
+    return () => {window.removeEventListener("keydown", key, true);window.removeEventListener("pioneer-device-fix",fix);};
+  }, []);
   const [files, setFiles] = useState<CodeFile[]>([]);
   const [entry, setEntry] = useState("");
   const [active, setActive] = useState("");
@@ -193,8 +211,10 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
           <button disabled={busy} onClick={() => mutate(() => api.scriptUpdate(id, { entry: active }))}>{active === entry ? "Точка входа" : "Сделать точкой входа"}</button>
           <button disabled={busy} onClick={() => mutate(async () => onRun?.(active))}>▶ Этот файл</button>
         </>}
+        {active.endsWith(".py") && <button onClick={() => setWizard(true)}>Подключить устройство · ⌘K</button>}
         {busy && <span>Сохраняю…</span>}
       </div>}
+      {wizard && <DeviceWizard board={board} kind={kind} id={id} currentBlockCode={kind === "blocks" ? drafts[active]?.text : undefined} onClose={() => setWizard(false)} onError={onError} onInsert={active.endsWith(".py") && drafts[active] ? code => updateDrafts(all => ({...all, [active]: {...all[active], text: all[active].text + "\n\n" + code}})) : undefined} />}
       <div className="min-h-0 flex-1">
         {Object.entries(drafts).map(([path, d]) => <div key={path} className="h-full" style={{ display: path === active ? "block" : "none" }}>
           {d.binary ? <div className="p-4 text-xs text-muted">

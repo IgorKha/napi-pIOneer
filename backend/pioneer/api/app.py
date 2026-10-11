@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from pioneer import __version__
-from pioneer.api import modules, language, watchdog, ai, code, drivers, auth, bench, blocks, board, groups, help, hooks, projects, remote, scripts, secrets, settings, system
+from pioneer.api import adafruit, modules, language, watchdog, ai, code, drivers, auth, bench, blocks, board, groups, help, hooks, projects, remote, scripts, secrets, settings, system
 from pioneer.ai import AIManager
 from pioneer.api.live import LiveHub
 from pioneer.auth import Auth
@@ -72,6 +72,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         app.state.live = live = LiveHub(b, app.state.hw)
         if isinstance(hal, BenchHAL):
             hal.on_change(live.mark_bench)
+        from pioneer.adafruit import Drivers as AdafruitDrivers
+        app.state.adafruit = AdafruitDrivers(cfg.data_dir)
         app.state.scripts = sm = ScriptManager(cfg.data_dir, app.state.hw)
         sm.on_pins, sm.on_leds = live.mark, live.mark_leds
         live.add_source(sm.drain)
@@ -120,6 +122,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     public.include_router(hooks.router)  # своя защита — токен ноды
     public.include_router(remote.router)  # своя защита — ключ remote_api_key
     protected = APIRouter(dependencies=[Depends(auth.require_session)])
+    protected.include_router(adafruit.router)
     protected.include_router(modules.router)
     protected.include_router(watchdog.router)
     protected.include_router(system.router)

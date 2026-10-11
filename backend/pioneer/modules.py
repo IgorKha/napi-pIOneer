@@ -141,6 +141,14 @@ class Modules:
             # Final root is needed so dependency site is stable; remove on any failure.
             shutil.copytree(tree.root, dest)
             try:
+                from pioneer.compat.circuitpython import check_lock
+
+                try:
+                    check_lock(dest)
+                except RuntimeError as e:
+                    raise TreeError(
+                        str(e) + "; установите нужную версию в Устройства → Adafruit"
+                    ) from e
                 if requirements.exists():
                     install_dependencies(dest, True)
                 result = extract_schema(dest / entry)

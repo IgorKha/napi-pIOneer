@@ -26,6 +26,9 @@ def main() -> None:
     root = os.getcwd()
     from pioneer.dependencies import site_for
     sys.path = [root, str(site_for(Path(root))), os.environ["PIONEER_LIB"], *[p for p in sys.path if p and p != root]]
+    from pioneer.compat.circuitpython import paths, check_lock
+    check_lock(Path(root))
+    sys.path[:0] = paths(Path(root))
     sys.argv = [path]
     runpy.run_path(os.path.relpath(path, root), run_name="__main__")
     if sdk._loop.has_work and not sdk._loop.running:

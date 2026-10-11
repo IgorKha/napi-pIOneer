@@ -32,7 +32,7 @@ def test_reference(board):
     out_pins = {s["id"]: s for s in syms["Output"]["support"]}
     assert out_pins["J9-7"]["available"] and not out_pins["J9-11"]["available"]  # J9-11 отдан I2C3
     assert {s["id"] for s in syms["Adc"]["support"]} == {"J9-26", "J10-3"}
-    assert [g["id"] for g in ref["guides"]] == ["start", "projects", "recipes", "workspace", "blocks", "ai", "network", "sensors", "system", "hardware", "drivers", "modules", "errors"]
+    assert [g["id"] for g in ref["guides"]] == ["start", "projects", "recipes", "workspace", "blocks", "ai", "network", "sensors", "system", "hardware", "drivers", "adafruit", "modules", "errors"]
     assert len(ref["nodes"]) >= 30
 
 

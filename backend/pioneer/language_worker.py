@@ -14,7 +14,18 @@ def analyze(body):
 
         try:
             ast.parse(body["code"])
-            return {"items": []}
+            if "root" not in body:
+                return {"items": []}
+            from pioneer.compat.diagnostics import diagnose
+
+            return {
+                "items": diagnose(
+                    body["code"],
+                    body["root"],
+                    body.get("board", {}),
+                    body.get("driver_versions", {}),
+                )
+            }
         except SyntaxError as e:
             return {
                 "items": [
@@ -26,9 +37,11 @@ def analyze(body):
     root = Path(body["root"]).resolve()
     lib = root.parent.parent / "lib"
     site = root.parent.parent / "dependencies" / f"{root.parent.name}-{root.name}"
+    from pioneer.compat.circuitpython import paths
+
     project = jedi.Project(
         str(root),
-        added_sys_path=[str(root), str(lib), str(site), str(REPO_ROOT / "backend")],
+        added_sys_path=[*paths(root), str(root), str(lib), str(site), str(REPO_ROOT / "backend")],
         smart_sys_path=False,
     )
     script = jedi.Script(code=body["code"], path=str(root / body["path"]), project=project)
@@ -54,9 +67,23 @@ def analyze(body):
         }
     if action == "hover":
         items = script.infer(line, column)
+
+        def documentation(item):
+            text = item.docstring()[:4000]
+            name = (item.module_name or "").split(".")[0]
+            if name.startswith("adafruit_"):
+                chip = name.removeprefix("adafruit_")
+                chip = {"character_lcd": "charlcd", "bus_device": "busdevice"}.get(chip, chip)
+                text += (
+                    "\n\n[Драйвер и документация на PyPI](https://pypi.org/project/adafruit-circuitpython-"
+                    + chip.replace("_", "-")
+                    + "/)"
+                )
+            return text
+
         return {
             "items": [
-                {"label": i.description, "documentation": i.docstring()[:4000]} for i in items[:5]
+                {"label": i.description, "documentation": documentation(i)} for i in items[:5]
             ]
         }
     items = script.goto(line, column, follow_imports=True, follow_builtin_imports=False)

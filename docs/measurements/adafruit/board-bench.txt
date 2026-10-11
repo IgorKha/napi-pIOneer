@@ -1,0 +1,9 @@
+adafruit-circuitpython-bme280 already installed
+adafruit-circuitpython-sht4x already installed
+adafruit-circuitpython-ssd1306 already installed
+adafruit-circuitpython-pca9685 already installed
+BME280: -12.0 81.0 979.9995422363281
+SHT4x: 25.0 50.00061036087587
+SSD1306: 85 pixels, exact framebuffer
+PCA9685: 50.028816598360656 32768
+PASS: all four unchanged drivers on Napi-C protocol bench; no physical hardware accessed

@@ -72,6 +72,7 @@ class Host:
         self.nodes: dict[str, block.Node] = {}
         self.files: dict[tuple[str, float], dict] = {}
         self.scopes: dict[str, ImportScope] = {}
+        self.compat_contexts = {}
         self.lock = threading.RLock()
         self.send_lock = threading.Lock()
         self.timers: list = []
@@ -87,7 +88,9 @@ class Host:
     # ---- вызовы ноды
     def _run(self, node: block.Node, fn, *args) -> list:
         node._actions = []
-        with node._scope.activate():
+        from pioneer.compat.circuitpython import Context, activate
+        context = self.compat_contexts.setdefault(node.id, Context(node.hw.call))
+        with node._scope.activate(), activate(context):
             fn(*args)
         out, node._actions = node._actions, []
         return out

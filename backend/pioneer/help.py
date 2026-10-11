@@ -27,7 +27,7 @@ SECTIONS = ("Args", "Returns", "Raises", "Example", "Hardware")
 GUIDES = [("start", "Начало"), ("projects", "Проекты и пульт"), ("recipes", "Рецепты"),
           ("workspace", "Файлы и библиотеки"), ("blocks", "Свои блоки"), ("ai", "AI-помощник"),
           ("network", "MQTT и HTTP"), ("sensors", "Датчики I2C"), ("system", "Диагностика и сохранность"), ("hardware", "Железо"),
-          ("drivers", "Драйверы ядра"), ("modules", "Модули периферии"), ("errors", "Ошибки")]
+          ("drivers", "Драйверы ядра"), ("adafruit", "Adafruit / CircuitPython"), ("modules", "Модули периферии"), ("errors", "Ошибки")]
 
 # Режим/шина, нужные классу SDK, — по ним из платы выбираются поддерживающие пины
 SUPPORT = {"Output": ("pin", "gpio_out"), "Input": ("pin", "gpio_in"), "Pwm": ("pin", "soft_pwm"),

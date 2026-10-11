@@ -236,6 +236,7 @@ class BenchHAL(HAL):
         self._core: dict[str, bool] = {}  # пины, которые ведёт core
         self._model_drive: dict[str, dict[str, bool]] = {}  # пин -> модель -> уровень (порядок = давность)
         self._levels: dict[str, bool] = {}
+        self._runtime_pulls = {}
         self._inputs: dict[str, _Input] = {}
         self._pwm: dict[str, tuple[float, float]] = {}
         self._adc: dict[int, dict[str, float]] = {}
@@ -492,12 +493,23 @@ class BenchHAL(HAL):
                 if pin in m.watch_pins:
                     m.on_pwm(pin, self._pwm.get(pin))
 
+    def set_pull(self, owner, pin, value):
+        with self._lock:
+            pulls = self._runtime_pulls.setdefault(pin, {})
+            pulls.pop(owner, None)
+            if value is not None:
+                pulls[owner] = value
+            self._update(pin, owner)
+
     def _resolve(self, pin: str) -> bool:
         if pin in self._core:
             return self._core[pin]
         drives = self._model_drive.get(pin)
         if drives:
             return list(drives.values())[-1]
+        pulls = self._runtime_pulls.get(pin)
+        if pulls:
+            return list(pulls.values())[-1] == "up"
         return self.board.pins[pin].default_pull == "up"
 
     def _update(self, pin: str, source: str) -> None:

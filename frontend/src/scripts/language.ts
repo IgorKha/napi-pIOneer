@@ -11,7 +11,17 @@ export function languageProviders(model:monaco.editor.ITextModel, scope:Scope) {
     }catch{return {items:[]};}finally{cancel.dispose();}
   }
   const selector={language:'python',pattern:model.uri.path};
-  const registrations=[
+  const fixCommand=monaco.editor.registerCommand(`pioneer.deviceFix.${model.id}`,(_accessor, fix:string)=>{
+    window.dispatchEvent(new CustomEvent("pioneer-device-fix", {detail:{fix,scope}}));
+  });
+  const registrations=[fixCommand,
+    monaco.languages.registerCodeActionProvider(selector,{provideCodeActions(m,_range,context){
+      if(m!==model)return {actions:[],dispose(){}};
+      return {actions:context.markers.filter(i=>typeof i.code==="string").map(i=>({
+        title:String(i.code).startsWith("install:")?"Установить драйвер":String(i.code).startsWith("pull:")?`Настроить подтяжку ${String(i.code).split(":")[1]} → pull-${String(i.code).split(":")[2]} (перезагрузка)` : "Плата: интерфейсы и занятость",
+        kind:"quickfix",diagnostics:[i],command:{id:`pioneer.deviceFix.${model.id}`,title:"Устройство",arguments:[i.code]},
+      })),dispose(){}};
+    }}),
     monaco.languages.registerCompletionItemProvider(selector,{triggerCharacters:['.'],async provideCompletionItems(m,p,_ctx,t){
       if(m!==model)return {suggestions:[]};const r=await query('complete',p,t);const w=m.getWordUntilPosition(p);
       return {suggestions:r.items.map((i:{label:string;detail:string;type:string})=>({label:i.label,insertText:i.label,detail:i.detail,kind:i.type==='function'?monaco.languages.CompletionItemKind.Function:i.type==='class'?monaco.languages.CompletionItemKind.Class:monaco.languages.CompletionItemKind.Variable,range:new monaco.Range(p.lineNumber,w.startColumn,p.lineNumber,w.endColumn)}))};
@@ -28,7 +38,7 @@ export function languageProviders(model:monaco.editor.ITextModel, scope:Scope) {
       token=new monaco.CancellationTokenSource();const current=token;
       const version=model.getVersionId();const r=await query('diagnostics',new monaco.Position(1,1),current.token);
       if(current.token.isCancellationRequested||model.isDisposed()||model.getVersionId()!==version)return;
-      monaco.editor.setModelMarkers(model,'pioneer-python',r.items.map((i:{line:number;column:number;message:string})=>({severity:monaco.MarkerSeverity.Error,message:i.message,startLineNumber:i.line,endLineNumber:i.line,startColumn:i.column+1,endColumn:i.column+2})));
+      monaco.editor.setModelMarkers(model,'pioneer-python',r.items.map((i:{line:number;column:number;message:string;fix?:string})=>({code:i.fix,severity:monaco.MarkerSeverity.Error,message:i.message,startLineNumber:i.line,endLineNumber:i.line,startColumn:i.column+1,endColumn:i.column+2})));
     },1200);
   }
   const changed=model.onDidChangeContent(diagnostics);diagnostics();
