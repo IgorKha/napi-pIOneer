@@ -626,3 +626,34 @@ def test_review_24_block_output_safe_survives_worker_stop(client, monkeypatch):
     pm.stop(p.id)
     assert writes[-1] is True
     assert "J9-7" not in pm.hw.res.claims
+
+
+def test_review_25_probe_runs_production_pwm_and_stops_promptly(monkeypatch):
+    import runpy
+    import sys
+    from types import SimpleNamespace
+    from pioneer.config import REPO_ROOT
+
+    value = SimpleNamespace(ACTIVE=1, INACTIVE=0)
+    monkeypatch.setitem(sys.modules, "gpiod", SimpleNamespace())
+    monkeypatch.setitem(
+        sys.modules, "gpiod.line", SimpleNamespace(Direction=None, Edge=None, Value=value)
+    )
+    probe = runpy.run_path(str(REPO_ROOT / "tools/probe/gpio_probe.py"))
+    high, stop = threading.Event(), threading.Event()
+    writes = []
+
+    def write(line, level):
+        writes.append(level)
+        if level:
+            high.set()
+
+    request = SimpleNamespace(set_value=write)
+    thread = threading.Thread(target=probe["production_pwm"], args=(request, 10, 0.01, 0.5, stop))
+    thread.start()
+    try:
+        assert high.wait(1)
+    finally:
+        stop.set()
+        thread.join(1)
+    assert not thread.is_alive() and writes[-1] == value.INACTIVE

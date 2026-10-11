@@ -3,6 +3,7 @@
 Запуск на плате:
     python3 gpio_probe.py debounce            # без проводов
     python3 gpio_probe.py pwm-nowire          # джиттер soft-PWM без проводов
+    PYTHONPATH=/path/to/app/backend EVBUF=1024 python3 gpio_probe.py pwm-production OUT IN 4
     python3 gpio_probe.py loopback OUT IN     # нужна перемычка между пинами (chip:line)
 """
 from __future__ import annotations
@@ -80,6 +81,28 @@ def soft_pwm(req, line: int, freq: float, duty: float, stop: threading.Event,
         time.sleep(max(0.0, t - time.monotonic()))
 
 
+class ProbeOutput:
+    """GPIO request belongs to the probe; SoftPwm may only change its level."""
+    def __init__(self, req, line):
+        self.req, self.line = req, line
+
+    def write(self, value):
+        self.req.set_value(self.line, Value.ACTIVE if value else Value.INACTIVE)
+
+    def close(self):
+        pass
+
+
+def production_pwm(req, line, freq, duty, stop):
+    from pioneer.hal.softpwm import SoftPwm
+    pwm = SoftPwm(ProbeOutput(req, line), freq, duty)
+    try:
+        stop.wait()
+    finally:
+        pwm.close()
+        print(f"  production SoftPwm: SCHED_FIFO={pwm.realtime}", flush=True)
+
+
 def cmd_pwm_nowire(spec: str = "2:4") -> None:
     """Меряет момент set_value(ACTIVE) по monotonic: ошибка периода относительно идеала."""
     path, line = parse(spec)
@@ -99,7 +122,7 @@ def cmd_pwm_nowire(spec: str = "2:4") -> None:
             summary("|period error|", err)
 
 
-def cmd_loopback(out_spec: str, in_spec: str, load: str = "0") -> None:
+def cmd_loopback(out_spec: str, in_spec: str, load: str = "0", *, production=False) -> None:
     out_path, out_line = parse(out_spec)
     in_path, in_line = parse(in_spec)
     out_req = gpiod.request_lines(out_path, consumer=CONSUMER, config={out_line: gpiod.LineSettings(
@@ -115,7 +138,10 @@ def cmd_loopback(out_spec: str, in_spec: str, load: str = "0") -> None:
         print(f"  set {v.name} -> read {got.name}")
         if got != v:
             print("  !! вход не повторяет выход — перемычки нет?")
-            return
+            out_req.set_value(out_line, Value.INACTIVE)
+            in_req.release()
+            out_req.release()
+            raise RuntimeError("нет петли: замер PWM не выполнялся")
     while in_req.wait_edge_events(timedelta(milliseconds=50)):
         in_req.read_edge_events()
 
@@ -130,7 +156,7 @@ def cmd_loopback(out_spec: str, in_spec: str, load: str = "0") -> None:
     # 2) Soft-PWM на OUT, edge-события на IN с ядерными таймстемпами
     for freq in (50, 100, 200, 500):
         stop = threading.Event()
-        th = threading.Thread(target=soft_pwm, args=(out_req, out_line, freq, 0.5, stop))
+        th = threading.Thread(target=production_pwm if production else soft_pwm, args=(out_req, out_line, freq, 0.5, stop))
         events = []
         th.start()
         t_end = time.monotonic() + 3
@@ -168,6 +194,11 @@ def cmd_loopback(out_spec: str, in_spec: str, load: str = "0") -> None:
 
     for p in burners:
         p.terminate()
+        p.join(timeout=2)
+    if production:
+        in_req.release()
+        out_req.release()
+        return
 
     # 3) Латентность «edge на входе → реакция в userspace»
     lat = []
@@ -222,4 +253,5 @@ def _burn() -> None:
 
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
-    {"debounce": cmd_debounce, "pwm-nowire": cmd_pwm_nowire, "loopback": cmd_loopback}[cmd](*args)
+    {"debounce": cmd_debounce, "pwm-nowire": cmd_pwm_nowire, "loopback": cmd_loopback,
+     "pwm-production": lambda *a: cmd_loopback(*a, production=True)}[cmd](*args)
