@@ -129,6 +129,54 @@ class Drivers:
         except FileNotFoundError:
             return {"requested": {}, "versions": {}}
 
+    def inspect(self, package, path=""):
+        """Read only files owned by an installed distribution, without importing it."""
+        version = self.state()["versions"].get(package)
+        if not version or not package.startswith("adafruit-circuitpython-"):
+            raise ValueError("Драйвер не установлен: установите его в Устройства → Adafruit")
+        site = self.site.resolve()
+        dist = next(
+            (
+                d
+                for d in distributions(path=[str(site)])
+                if normalized(d.metadata["Name"]) == package
+            ),
+            None,
+        )
+        if dist is None:
+            raise ValueError("Метаданные установленного драйвера не найдены")
+        files = sorted(str(f) for f in dist.files or [] if str(f).endswith(".py"))
+        result = {
+            "package": package,
+            "version": dist.version,
+            "files": files,
+            "summary": dist.metadata.get("Summary", ""),
+            "docs": "https://pypi.org/project/" + package + "/",
+        }
+        from pioneer.adafruit_templates import (
+            PROFILES,
+            package as profile_package,
+            snippet,
+            block_template,
+        )
+
+        for chip, profile in PROFILES.items():
+            if profile_package(chip) == package:
+                result["profile"] = profile
+                result["connection_example"] = snippet(chip, "i2c1", profile["address"])
+                if chip in ("bme280", "sht4x", "pca9685"):
+                    result["block_example"] = block_template(chip, "i2c1", profile["address"])
+        if path:
+            if path not in files:
+                raise ValueError("Выберите Python-файл из списка files установленного драйвера")
+            file = (site / path).resolve()
+            if not file.is_relative_to(site) or not file.is_file():
+                raise ValueError("Файл вне site драйверов")
+            with file.open("r", encoding="utf-8") as stream:
+                source = stream.read(24001)
+            result.update(path=path, untrusted_source=source[:24000], truncated=len(source) > 24000)
+        return result
+
     def uses(self, package):
         result = []
         module = package.removeprefix("adafruit-circuitpython-").replace("-", "_")
