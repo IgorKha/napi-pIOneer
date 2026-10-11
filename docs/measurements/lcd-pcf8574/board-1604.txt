@@ -1,0 +1,10 @@
+2026-10-11, Napi-C, I2C1 (/dev/i2c-1), PCF8574 address 0x27.
+User reports LCD1604 connected, powered from 3.3 V; SDA J9-3, SCL J9-5.
+Command: python3 smoke.py --rows 4
+
+row 1, DDRAM 0x00: '1 Napi-C Pioneer' — verified
+row 2, DDRAM 0x40: '2 LCD1604 16x4  ' — verified
+row 3, DDRAM 0x10: '3 I2C1 0x27     ' — verified
+row 4, DDRAM 0x50: '4 Line four     ' — verified
+PASS: I2C1 0x27, 16x4, exact DDRAM readback
+Physical row placement and contrast still require visual confirmation.
