@@ -34,6 +34,7 @@ from pioneer.engine.types import Origin, jsonable
 
 log = logging.getLogger(__name__)
 CALL_TIMEOUT_S = 1.0
+WORKER_START_TIMEOUT_S = 15.0
 SCHEMA_TIMEOUT_S = 15.0  # импорт на A35 небыстрый
 PREFIX = "user."
 
@@ -98,14 +99,22 @@ class BlockHostClient:
         self._pending: dict[int, list] = {}
         self._send_lock = threading.Lock()
         self.dead: str | None = None
+        self._ready = threading.Event()
         threading.Thread(target=self._reader, name="blockhost-rpc", daemon=True).start()
         threading.Thread(target=self._output, name="blockhost-out", daemon=True).start()
+        # Cold Python imports on the A35 must not consume the handler's 1 s budget.
+        if not self._ready.wait(WORKER_START_TIMEOUT_S) or self.dead:
+            self.dead = self.dead or f"процесс блоков не готов за {WORKER_START_TIMEOUT_S:g} с"
+            self.close()
+            raise NodeError(self.dead)
 
     def _reader(self) -> None:
         try:
             for line in self.sock.makefile("r", encoding="utf-8"):
                 msg = json.loads(line)
-                if "hardware" in msg:
+                if msg.get("ready") is True:
+                    self._ready.set()
+                elif "hardware" in msg:
                     try:
                         result=self.on_hardware(msg["node"],msg["op"],msg["args"])
                         reply={"hardware_reply":msg["hardware"],"ok":True,"result":result}
@@ -120,6 +129,7 @@ class BlockHostClient:
         except (OSError, ValueError):
             pass
         self.dead = self.dead or "процесс блоков завершился"
+        self._ready.set()
         for slot in list(self._pending.values()):
             slot[0].set()
 

@@ -168,6 +168,7 @@ class Host:
         finally:self.hardware_pending.pop(rid,None)
 
     def serve(self) -> None:
+        self.send({"ready": True})
         while (req:=self.requests.get()) is not None:
             with self.lock:
                 try:

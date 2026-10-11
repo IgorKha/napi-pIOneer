@@ -19,18 +19,23 @@ class ImportScope:
 
         self.site = site_for(self.root)
         self.modules: dict = {}
+        # Import paths stay fixed for this worker; resolving every module on each
+        # callback is expensive on the board filesystem. A restart resets the cache.
+        self._local_paths: dict[str, bool] = {}
 
     def local(self, module) -> bool:
         paths = [getattr(module, "__file__", None), *list(getattr(module, "__path__", ()))]
-        return any(
-            p
-            and (
-                Path(p).resolve().is_relative_to(self.root)
-                or Path(p).resolve().is_relative_to(self.lib)
-                or Path(p).resolve().is_relative_to(self.site)
-            )
-            for p in paths
-        )
+        for p in paths:
+            if not p:
+                continue
+            if p not in self._local_paths:
+                resolved = Path(p).resolve()
+                self._local_paths[p] = any(
+                    resolved.is_relative_to(root) for root in (self.root, self.lib, self.site)
+                )
+            if self._local_paths[p]:
+                return True
+        return False
 
     @contextmanager
     def activate(self):

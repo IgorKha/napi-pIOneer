@@ -180,3 +180,72 @@ def test_script_node(env):
     # ошибка в коде: сохраняется, но не запускается
     r = pm.apply_ops(p.id, [{"op": "set_param", "node": "s", "name": "code", "value": "x = ("}])
     assert not r["validation"]["can_start"] and "скрипт: синтаксис" in r["validation"]["incomplete"][0]["message"]
+
+
+def test_worker_waits_for_ready_before_handler_budget(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    import pioneer.userblocks as workers
+
+    original = subprocess.Popen
+
+    def delayed(args, **kwargs):
+        if args == [sys.executable, "-m", "pioneer.blockhost"]:
+            args = [sys.executable, "-c", "import time,runpy; time.sleep(0.3); runpy.run_module('pioneer.blockhost',run_name='__main__')"]
+        return original(args, **kwargs)
+
+    monkeypatch.setattr(workers.subprocess, "Popen", delayed)
+    path = tmp_path / "block.py"
+    path.write_text(TEMPLATE)
+    host = workers.BlockHostClient(lambda *a: None, lambda *a: None)
+    try:
+        assert host._ready.is_set() and host.dead is None
+        host.call({"op": "load", "file": str(path), "block": "hysteresis", "node": "h", "params": {}}, timeout=0.2)
+        actions = host.call({"op": "call", "method": "on_change", "node": "h", "inputs": {"value": 40, "low": 30, "high": 35}, "changed": ["value"]}, timeout=0.2)
+        assert ["set", "out", True] in actions
+    finally:
+        host.close()
+
+
+def test_worker_startup_timeout_reaps_process(monkeypatch):
+    import subprocess
+    import sys
+    import pioneer.userblocks as workers
+    from pioneer.engine.node import NodeError
+
+    original = subprocess.Popen
+    started = []
+
+    def stuck(args, **kwargs):
+        proc = original([sys.executable, "-c", "import time; time.sleep(30)"], **kwargs)
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(workers.subprocess, "Popen", stuck)
+    monkeypatch.setattr(workers, "WORKER_START_TIMEOUT_S", 0.05)
+    with pytest.raises(NodeError, match="не готов"):
+        workers.BlockHostClient(lambda *a: None, lambda *a: None)
+    assert started[0].poll() is not None
+
+
+def test_import_scope_reuses_path_classification(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from pioneer.importscope import ImportScope
+
+    root = tmp_path / "blocks" / "one"
+    root.mkdir(parents=True)
+    scope = ImportScope(root)
+    paths = [str(root / "helper.py"), str(tmp_path / "elsewhere.py")]
+    original = Path.resolve
+    calls = []
+
+    def resolve(path, *args, **kwargs):
+        calls.append(str(path))
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    for _ in range(3):
+        assert scope.local(SimpleNamespace(__file__=paths[0]))
+        assert not scope.local(SimpleNamespace(__file__=paths[1]))
+    assert calls == paths
