@@ -41,7 +41,7 @@ class SoftPwm(PwmLine):
 
     def close(self, safe_value: bool = False) -> None:
         self._stop.set()
-        self._thread.join(timeout=1)
+        self._thread.join()
         self.line.write(safe_value)
         self.line.close()
 
@@ -56,7 +56,8 @@ class SoftPwm(PwmLine):
                 t += period
             else:
                 self.line.write(True)
-                time.sleep(max(0.0, t + period * duty - time.monotonic()))
+                if self._stop.wait(max(0.0, t + period * duty - time.monotonic())):
+                    break
                 self.line.write(False)
                 t += period
             delay = t - time.monotonic()

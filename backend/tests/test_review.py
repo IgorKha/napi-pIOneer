@@ -397,3 +397,31 @@ def test_review_14_failed_mode_switch_retains_owner_and_restores_input(hw, monke
         hw.acquire("new", "New", "J9-12", "gpio_out")
     assert "J9-12" not in hw.res.claims
     hw.release("owner")
+
+
+def test_review_16_low_frequency_pwm_closes_before_releasing():
+    from pioneer.hal.softpwm import SoftPwm
+
+    class Line:
+        def __init__(self):
+            self.high = threading.Event()
+            self.closed = False
+            self.values = []
+
+        def write(self, value):
+            assert not self.closed
+            self.values.append(value)
+            if value:
+                self.high.set()
+
+        def close(self):
+            self.closed = True
+
+    line = Line()
+    pwm = SoftPwm(line, freq=0.01, duty=0.5)
+    assert line.high.wait(1)
+    start = time.monotonic()
+    pwm.close(True)
+    assert time.monotonic() - start < 0.5
+    assert not pwm._thread.is_alive()
+    assert line.closed and line.values[-1] is True
