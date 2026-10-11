@@ -1,0 +1,11 @@
+before {"rev": 106, "status": {"state": "stopped", "error": null, "started": null, "rev": null, "dirty": false}, "validation": {"ok": true, "can_start": true, "errors": [], "incomplete": [], "warnings": []}}
+start_seconds 2.078
+{"sample": 1, "values": {"ne1fa45.valid": true, "ne1fa45.temperature": 26.1, "ne1fa45.humidity": 55.3, "ne1fa45.error": "", "n35309c.out": "26:55"}, "nodes": {"ne1fa45": {"state": "running", "error": null}, "n419e07": {"state": "running", "error": null}, "n35309c": {"state": "running", "error": null}}, "views": {"n419e07": {"frame_ms": 23.1}}}
+{"sample": 2, "values": {"ne1fa45.valid": true, "ne1fa45.temperature": 26.1, "ne1fa45.humidity": 55.3, "ne1fa45.error": "", "n35309c.out": "26:55"}, "nodes": {"ne1fa45": {"state": "running", "error": null}, "n419e07": {"state": "running", "error": null}, "n35309c": {"state": "running", "error": null}}, "views": {"n419e07": {"frame_ms": 23.1}}}
+{"sample": 3, "values": {"ne1fa45.valid": true, "ne1fa45.temperature": 26.1, "ne1fa45.humidity": 55.3, "ne1fa45.error": "", "n35309c.out": "26:55"}, "nodes": {"ne1fa45": {"state": "running", "error": null}, "n419e07": {"state": "running", "error": null}, "n35309c": {"state": "running", "error": null}}, "views": {"n419e07": {"frame_ms": 23.1}}}
+{"sample": 4, "values": {"ne1fa45.valid": true, "ne1fa45.temperature": 26.1, "ne1fa45.humidity": 55.2, "ne1fa45.error": "", "n35309c.out": "26:55"}, "nodes": {"ne1fa45": {"state": "running", "error": null}, "n419e07": {"state": "running", "error": null}, "n35309c": {"state": "running", "error": null}}, "views": {"n419e07": {"frame_ms": 23.1}}}
+Traceback (most recent call last):
+  File "/tmp/pioneer-live-flow-check.py", line 25, in <module>
+    assert after['graph']==before['graph'] and after['rev']==before['rev']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError
