@@ -425,3 +425,40 @@ def test_review_16_low_frequency_pwm_closes_before_releasing():
     assert time.monotonic() - start < 0.5
     assert not pwm._thread.is_alive()
     assert line.closed and line.values[-1] is True
+
+
+def test_review_17_blocked_worker_does_not_block_edge_dispatch():
+    import queue
+    import socket
+    from types import SimpleNamespace
+    from pioneer.scripts import _Runner, Status
+
+    runner = _Runner.__new__(_Runner)
+    runner.sock, peer = socket.socketpair()
+    runner.sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024)
+    runner._send_lock = threading.Lock()
+    runner._edges = queue.Queue(maxsize=4)
+    runner._edge_stop = threading.Event()
+    runner.status = Status()
+    thread = threading.Thread(target=runner._send_edges)
+    thread.start()
+    try:
+        event = SimpleNamespace(rising=True, timestamp_ns=1)
+        start = time.monotonic()
+        for _ in range(2000):
+            runner._edge("J10-2", event)
+        assert time.monotonic() - start < 0.5
+        assert runner.status.edge_dropped > 0
+        assert runner._edges.qsize() <= 4
+        # Another listener on the same reader continues immediately.
+        delivered = threading.Event()
+        for cb in (runner._edge, lambda pin, ev: delivered.set()):
+            cb("J10-2", event)
+        assert delivered.is_set()
+    finally:
+        runner._edge_stop.set()
+        runner.sock.shutdown(socket.SHUT_RDWR)
+        thread.join(1)
+        runner.sock.close()
+        peer.close()
+    assert not thread.is_alive()

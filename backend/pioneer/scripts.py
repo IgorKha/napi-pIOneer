@@ -10,6 +10,7 @@ import collections
 import json
 import logging
 import os
+import queue
 import re
 import secrets
 import signal
@@ -65,6 +66,7 @@ class Status:
     started: float | None = None
     exit_code: int | None = None
     error: str | None = None
+    edge_dropped: int = 0
 
 
 class ScriptError(Exception):
@@ -97,6 +99,10 @@ class _Runner:
             start_new_session=True)
         child.close()
         self.status = Status("running", self.proc.pid, time.time())
+        self._edges = queue.Queue(maxsize=512)
+        self._edge_stop = threading.Event()
+        self._edge_thread = threading.Thread(target=self._send_edges, name=f"script-{meta.id}-edges", daemon=True)
+        self._edge_thread.start()
         for target, name in ((self._rpc_loop, "rpc"), (lambda: self._pipe(self.proc.stdout, "out"), "out"),
                              (lambda: self._pipe(self.proc.stderr, "err"), "err"), (self._wait, "wait")):
             threading.Thread(target=target, name=f"script-{meta.id}-{name}", daemon=True).start()
@@ -118,6 +124,12 @@ class _Runner:
     def _wait(self) -> None:
         code = self.proc.wait()
         # Выходы переходят в заданный безопасный уровень, порты закрываются.
+        self._edge_stop.set()
+        try:
+            self.sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self._edge_thread.join()
         self.mgr.hw.release(self.owner)
         self.sock.close()
         if self._stopping or code in (0, -signal.SIGTERM):
@@ -126,6 +138,9 @@ class _Runner:
         else:
             st = Status("error", exit_code=code, error=self._last_err or f"код выхода {code}")
             self.mgr._log(self.meta.id, "sys", f"упал (код {code})")
+        st.edge_dropped = self.status.edge_dropped
+        if st.edge_dropped:
+            self.mgr._log(self.meta.id, "sys", f"потеряно GPIO-событий: {st.edge_dropped}")
         self.mgr._finished(self.meta.id, self, st)
 
     def _pipe(self, stream, kind: str) -> None:
@@ -161,7 +176,18 @@ class _Runner:
             pass
 
     def _edge(self, pin: str, ev) -> None:
-        self._send({"ev": "edge", "pin": pin, "rising": ev.rising, "ts": ev.timestamp_ns})
+        try:
+            self._edges.put_nowait({"ev": "edge", "pin": pin, "rising": ev.rising, "ts": ev.timestamp_ns})
+        except queue.Full:
+            self.status.edge_dropped += 1
+
+    def _send_edges(self) -> None:
+        while not self._edge_stop.is_set():
+            try:
+                msg = self._edges.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            self._send(msg)
 
     def _handle(self, op: str, **a):
         hw, o, n = self.mgr.hw, self.owner, self.owner_name
