@@ -246,12 +246,12 @@ class KernelDrivers:
                 "blockers": blockers, "ready": not blockers, "compiled": compiled, "needs_reboot": True}, updated, blob
 
     def preview(self, pin, enabled):
-        with self.lock, self.overlays.lock:
+        with self.overlays.lock, self.lock:
             return self._plan(pin, enabled)[0]
 
     def apply(self, pin, enabled, expected_hash):
         self.real()
-        with self.lock, self.overlays.lock:
+        with self.overlays.lock, self.lock:
             plan, text, blob = self._plan(pin, enabled)
             if not expected_hash or plan["hash"] != expected_hash:
                 raise DriverError("настройки изменились — обновите предпросмотр", 409)
