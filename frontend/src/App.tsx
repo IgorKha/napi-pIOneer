@@ -12,6 +12,8 @@ import { Login } from "./Login";
 import { SecretsPage } from "./SecretsPage";
 import { useLive, type LiveStatus } from "./useLive";
 
+import { loadSnapshot } from "./liveSnapshot";
+
 const STATUS: Record<LiveStatus, [string, string]> = {
   open: ["bg-ok", "онлайн"],
   connecting: ["bg-warn", "подключение…"],
@@ -56,7 +58,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
   const [toast, setToast] = useState<string | null>(null);
   const [initialBench, setInitialBench] = useState<BenchModel[] | null>(null);
   const { pins: live, bench, leds, scriptLogs, scriptStatus, status, projectLive, projectLogs, projectStatus,
-          resetProjectLive } = useLive(initialBench, onUnauthorized);
+          resetProjectLive, socket } = useLive(initialBench, onUnauthorized);
   const route = useRoute();
   // плата с живыми захватами — для подсказок пинов в редакторе
   const liveBoard = useMemo(() => board && {
@@ -64,11 +66,11 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
   }, [board, live]);
 
   useEffect(() => {
-    api.board().then((b) => {
+    return loadSnapshot(api.board, (b) => {
       setBoard(b);
       if (b.hal === "bench") api.bench().then((r) => setInitialBench(r.models));
     }, (e: Error) => setLoadError(e.message));
-  }, []);
+  }, [socket]);
 
   useEffect(() => {
     const reload = () => { api.board().then(setBoard, (e: Error) => setLoadError(e.message)); };
@@ -119,7 +121,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
           <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
             <ProjectsPage board={liveBoard} selected={route.id}
                           group={route.group ? { gid: route.group, inst: route.inst ?? "" } : undefined} pinLive={live} live={projectLive} logs={projectLogs}
-                          status={projectStatus} resetLive={resetProjectLive} onError={showError} />
+                          status={projectStatus} socket={socket} resetLive={resetProjectLive} onError={showError} />
           </Suspense>
         ) : <div className="p-8 text-muted">Загрузка…</div>
       ) : route.page === "blocks" ? (
@@ -134,7 +136,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
         </Suspense>
       ) : route.page === "scripts" ? (
         <Suspense fallback={<div className="p-8 text-muted">Загрузка редактора…</div>}>
-          <ScriptsPage board={liveBoard} selected={route.id} liveLogs={scriptLogs} liveStatus={scriptStatus}
+          <ScriptsPage board={liveBoard} selected={route.id} liveLogs={scriptLogs} liveStatus={scriptStatus} socket={socket}
                        onError={showError} />
         </Suspense>
       ) : board ? (

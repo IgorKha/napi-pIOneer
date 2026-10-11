@@ -24,3 +24,15 @@ assert.equal(preview.graph.nodes.length,4);
 assert.equal(after.nodes.length,3);
 assert.equal(before.edges.length,1);
 console.log('Markdown, guide links, and AI graph diff: passed');
+
+// review #19: an old connection cannot overwrite the replacement snapshot.
+const {loadSnapshot} = await import('../src/liveSnapshot.ts');
+let resolveOld, resolveNew;
+const received=[];
+const cancel=loadSnapshot(()=>new Promise(r=>{resolveOld=r}),v=>received.push(v),e=>{throw e});
+cancel();
+loadSnapshot(()=>new Promise(r=>{resolveNew=r}),v=>received.push(v),e=>{throw e});
+resolveNew({values:{fresh:2},nodes:{}}); await Promise.resolve();
+resolveOld({values:{stale:1},nodes:{error:'old'}}); await Promise.resolve();
+assert.deepEqual(received,[{values:{fresh:2},nodes:{}}]);
+console.log('review #19 reconnect snapshots: passed');

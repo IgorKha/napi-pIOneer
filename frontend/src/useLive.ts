@@ -33,7 +33,11 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
       setStatus("connecting");
       const proto = location.protocol === "https:" ? "wss" : "ws";
       ws = new WebSocket(`${proto}://${location.host}/pioneer/ws`);
-      ws.onopen = () => { setStatus("open"); setSocket(ws); };
+      ws.onopen = () => {
+        setProjectLive({}); setProjectStatus({}); setScriptStatus({});
+        setScriptLogs({}); setProjectLogs({}); setPins({}); setLeds({}); setBench({});
+        setStatus("open"); setSocket(ws);
+      };
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === "pins") setPins((prev) => ({ ...prev, ...msg.pins }));

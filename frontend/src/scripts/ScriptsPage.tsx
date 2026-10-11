@@ -6,6 +6,8 @@ import { AIPanel } from "../ai/AIPanel";
 import { ai } from "../ai/api";
 import { CodeWorkspace, type WorkspaceHandle } from "./CodeWorkspace";
 
+import { loadSnapshot } from "../liveSnapshot";
+
 const STATE: Record<ScriptStatus["state"], [string, string]> = {
   running: ["bg-ok", "работает"],
   error: ["bg-err", "ошибка"],
@@ -14,6 +16,7 @@ const STATE: Record<ScriptStatus["state"], [string, string]> = {
 };
 
 interface Props {
+  socket: WebSocket | null;
   board: Board | null;
   selected?: string;
   liveLogs: Record<string, LogLine[]>;
@@ -21,7 +24,7 @@ interface Props {
   onError: (msg: string) => void;
 }
 
-export function ScriptsPage({ board, selected, liveLogs, liveStatus, onError }: Props) {
+export function ScriptsPage({ socket, board, selected, liveLogs, liveStatus, onError }: Props) {
   const [list, setList] = useState<ScriptMeta[]>([]);
   const [libraries, setLibraries] = useState<{id: string; name: string}[]>([]);
   const [library, setLibrary] = useState<string | null>(null);
@@ -30,7 +33,7 @@ export function ScriptsPage({ board, selected, liveLogs, liveStatus, onError }: 
   useEffect(() => { reloadLibraries(); }, []);
   useEffect(() => { setLibrary(null); }, [selected]);
   const reload = useCallback(() => api.scripts().then(setList, (e: Error) => onError(e.message)), [onError]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { reload(); }, [reload, socket]);
 
   // без выбранного — открыть первый
   useEffect(() => {
@@ -90,7 +93,7 @@ export function ScriptsPage({ board, selected, liveLogs, liveStatus, onError }: 
       {library ? <div className="min-w-0 flex-1"><CodeWorkspace key={library} kind="lib" id={library} board={board}
         onError={onError} onSaved={reloadLibraries} onDirty={() => {}} /></div> : selected ? (
         <ScriptView key={selected} id={selected} board={board} liveLog={liveLogs[selected]}
-                    liveStatus={liveStatus[selected]} onError={onError} onListChange={reload} />
+                    liveStatus={liveStatus[selected]} socket={socket} onError={onError} onListChange={reload} />
       ) : (
         <div className="flex flex-1 items-center justify-center text-muted">
           <button onClick={create} className="rounded bg-accent px-4 py-2 text-white">Создать первый скрипт</button>
@@ -100,8 +103,8 @@ export function ScriptsPage({ board, selected, liveLogs, liveStatus, onError }: 
   );
 }
 
-function ScriptView({ id, board, liveLog, liveStatus, onError, onListChange }: {
-  id: string; board: Board | null; liveLog?: LogLine[]; liveStatus?: ScriptStatus;
+function ScriptView({ socket, id, board, liveLog, liveStatus, onError, onListChange }: {
+  socket: WebSocket | null; id: string; board: Board | null; liveLog?: LogLine[]; liveStatus?: ScriptStatus;
   onError: (m: string) => void; onListChange: () => void;
 }) {
   const [script, setScript] = useState<ScriptFull | null>(null);
@@ -113,11 +116,11 @@ function ScriptView({ id, board, liveLog, liveStatus, onError, onListChange }: {
   const logStart = useRef(0); // сколько строк live-лога уже было до загрузки истории
 
   useEffect(() => {
-    api.script(id).then((s) => {
+    return loadSnapshot(() => api.script(id), (s) => {
       setScript(s);
       logStart.current = liveLog?.length ?? 0;
     }, (e: Error) => { onError(e.message); navigate({ page: "scripts" }); });
-  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [id, socket]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const status = liveStatus ?? script?.status;
   const running = status?.state === "running";

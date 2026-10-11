@@ -6,6 +6,7 @@ import { ProjectEditor } from "./ProjectEditor";
 const DOT: Record<ProjectStatus["state"], string> = { running: "bg-ok", error: "bg-err", stopped: "bg-muted" };
 
 interface Props {
+  socket: WebSocket | null;
   board: Board;
   selected?: string;
   group?: { gid: string; inst: string };
@@ -18,13 +19,13 @@ interface Props {
 }
 
 /** Проекты (spec 3.2, 4): список слева, редактор графа справа. */
-export function ProjectsPage({ board, selected, group, pinLive, live, logs, status, resetLive, onError }: Props) {
+export function ProjectsPage({ socket, board, selected, group, pinLive, live, logs, status, resetLive, onError }: Props) {
   const [list, setList] = useState<ProjectMeta[]>([]);
   const [templates, setTemplates] = useState<Awaited<ReturnType<typeof api.projectTemplates>>["templates"]>([]);
   useEffect(() => {api.projectTemplates().then(r => setTemplates(r.templates), (e: Error) => onError(e.message));}, [onError]);
   const [types, setTypes] = useState<NodeTypeSchema[] | null>(null);
   const reload = useCallback(() => api.projects().then(setList, (e: Error) => onError(e.message)), [onError]);
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { reload(); }, [reload, socket]);
   useEffect(() => {
     // каждый раз заново: свои блоки могли измениться на странице «Блоки»
     api.nodeTypes().then((r) => setTypes(r.types), (e: Error) => onError(e.message));
@@ -104,7 +105,7 @@ export function ProjectsPage({ board, selected, group, pinLive, live, logs, stat
 
       {selected && types ? (
         <ProjectEditor key={`${selected}/${group?.inst ?? ""}`} id={selected} group={group} board={board} types={types} pinLive={pinLive}
-                       live={live[selected]} liveLog={logs[selected]} liveStatus={status[selected]}
+                       live={live[selected]} liveLog={logs[selected]} liveStatus={status[selected]} socket={socket}
                        resetLive={resetLive} onError={onError} onListChange={reload} />
       ) : (
         <div className="flex flex-1 items-center justify-center text-muted">

@@ -19,6 +19,8 @@ import { AIPanel } from "../ai/AIPanel";
 import type { AIArtifact } from "../ai/api";
 import { graphPreview, changeColor, edgeKey } from "./preview";
 
+import { loadSnapshot } from "../liveSnapshot";
+
 const nodeTypes = { pnode: GraphNodeView, board: BoardNodeView };
 type AnyNode = FlowNode | BoardFlowNode;
 
@@ -29,6 +31,7 @@ const STATE: Record<ProjectStatus["state"], [string, string]> = {
 };
 
 export interface EditorProps {
+  socket: WebSocket | null;
   id: string;
   group?: { gid: string; inst: string }; // правка содержимого группы (Tab внутрь)
   board: Board;
@@ -62,7 +65,7 @@ function liveInside(live: ProjectLive | undefined, inst: string): ProjectLive | 
 const GROUP_PREFIX = "group.";
 export const groupIdOf = (type: string) => (type.startsWith(GROUP_PREFIX) ? type.slice(GROUP_PREFIX.length).split("@")[0] : null);
 
-function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveLog, liveStatus, resetLive, onError, onListChange }: EditorProps) {
+function Editor({ socket, id, group, board, types, pinLive, live: projectLiveData, liveLog, liveStatus, resetLive, onError, onListChange }: EditorProps) {
   const [project, setProject] = useState<ProjectFull | null>(null);
   const [groupName, setGroupName] = useState<string | null>(null);
   const [groupTargets, setGroupTargets] = useState<[string, string][]>([]); // входы, подключённые снаружи группы
@@ -110,8 +113,8 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
 
   // live-снимок при открытии запущенного проекта (дальше — дельты по WS)
   useEffect(() => {
-    if (running) api.projectLive(id).then((s) => resetLive(id, s), () => {});
-  }, [id, running, resetLive]);
+    return loadSnapshot(() => api.projectLive(id), s => resetLive(id, s), () => {});
+  }, [id, running, resetLive, socket]);
 
   // ---- операции (spec 3.7a): сервер валидирует и применяет пакет атомарно
   const send = useCallback(async (ops: Op[], history: "push" | "undo" | "redo" = "push", baseRev?: number) => {
