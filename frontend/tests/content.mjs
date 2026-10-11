@@ -48,3 +48,18 @@ release(); await Promise.all([first,second]); assert.deepEqual(calls,[7,8]);
 await assert.rejects(queue.run(async()=>{throw new Error('failed');}));
 await queue.run(async()=>{calls.push(rev);}); assert.equal(calls.at(-1),9);
 console.log('review #20 serialized mutations: passed');
+
+// review #21: Run awaits newer edits, including edits during tree refresh.
+const {saveDrafts}=await import('../src/scripts/saveDrafts.ts');
+let drafts={'main.py':{text:'old',saved:'',binary:false}};
+let finishWrite, refreshCount=0; const writes=[];
+const save=saveDrafts(()=>drafts,async(path,text)=>{
+  writes.push(text); if(text==='old')await new Promise(r=>{finishWrite=r});
+},(path,text)=>{drafts[path]={...drafts[path],saved:text};},async()=>{
+  if(!refreshCount++)drafts['main.py'].text='newest';
+});
+drafts['main.py'].text='new'; finishWrite(); await save;
+assert.deepEqual(writes,['old','newest']);
+assert.equal(drafts['main.py'].saved,'newest');
+await assert.rejects(saveDrafts(()=>({'main.py':{text:'bad',saved:'',binary:false}}),async()=>{throw new Error('disk full');},()=>{},async()=>{}));
+console.log('review #21 save-before-run: passed');

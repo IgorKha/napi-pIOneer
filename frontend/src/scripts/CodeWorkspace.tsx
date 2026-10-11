@@ -9,7 +9,7 @@ interface Props {
   onRun?: (file: string) => Promise<void>;
   location?: { path: string; line: number } | null;
 }
-interface Draft { text: string; saved: string; binary: boolean }
+import { saveDrafts, type Draft } from "./saveDrafts";
 
 export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWorkspace(
   { kind, id, board, onError, onSaved, onDirty, onRun, location }, ref,
@@ -22,7 +22,11 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
   const [autosave, setAutosave] = useState(true);
   const [busy, setBusy] = useState(false);
   const [action, setAction] = useState<{op: "file" | "mkdir" | "move" | "delete"; path: string; target: string} | null>(null);
-  const current = useRef(drafts); current.current = drafts;
+  const current = useRef(drafts);
+  const updateDrafts = (update: Record<string, Draft> | ((drafts: Record<string, Draft>) => Record<string, Draft>)) => {
+    current.current = typeof update === "function" ? update(current.current) : update;
+    setDrafts(current.current);
+  };
   const saving = useRef(false);
   const pendingSave = useRef<Promise<void>>(Promise.resolve());
   const autosaveRef = useRef(autosave); autosaveRef.current = autosave;
@@ -44,7 +48,7 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
         await codeRequest(`${base}/download?path=${encodeURIComponent(path)}`);
         draft = { text: "", saved: "", binary: true };
       }
-      setDrafts(d => ({ ...d, [path]: draft }));
+      updateDrafts(d => ({ ...d, [path]: draft }));
     }
     setActive(path);
   };
@@ -61,12 +65,10 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
     saving.current = true; setBusy(true);
     pendingSave.current = (async () => {
       try {
-        for (const [path, d] of Object.entries(current.current)) {
-          if (d.binary || d.text === d.saved) continue;
-          await api.codeWrite(kind, id, path, d.text);
-          setDrafts(all => ({ ...all, [path]: { ...all[path], saved: d.text } }));
-        }
-        await reload(); onSaved();
+        await saveDrafts(() => current.current,
+          (path, text) => api.codeWrite(kind, id, path, text),
+          (path, text) => updateDrafts(all => ({ ...all, [path]: { ...all[path], saved: text } })),
+          async () => { await reload(); onSaved(); });
       } finally { saving.current = false; setBusy(false); }
     })();
     return pendingSave.current;
@@ -83,7 +85,7 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
   }, [base]);
   useImperativeHandle(ref, () => ({ save, refreshFile: async (path: string) => {
     const f = await api.codeFile(kind, id, path);
-    setDrafts(d => ({...d, [path]: {text: f.text, saved: f.text, binary: false}}));
+    updateDrafts(d => ({...d, [path]: {text: f.text, saved: f.text, binary: false}}));
     setActive(path); await reload(); onSaved();
   } }));
   useEffect(() => {
@@ -95,7 +97,7 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
     if (saving.current) return;
     try {
       await save(); setBusy(true); await fn();
-      if (reset) { setDrafts({}); setActive(""); }
+      if (reset) { updateDrafts({}); setActive(""); }
       await reload(); onSaved();
     } catch (e) { report(e); }
     finally { setBusy(false); }
@@ -199,7 +201,7 @@ export const CodeWorkspace = forwardRef<WorkspaceHandle, Props>(function CodeWor
             {/\.(png|jpe?g|gif|webp)$/i.test(path) ? <img className="max-h-96 max-w-full" alt={path} src={codeUrl(`${base}/download?path=${encodeURIComponent(path)}`)} /> : "Бинарный файл — доступен для скачивания"}
           </div> : <CodeEditor analysis={{kind,id,path}} onDefinition={loc=>{setDefinition(loc);open(loc.path).catch(report);}} value={d.text} board={board} language={path.endsWith(".py") ? "python" : "plaintext"}
             line={definition?.path === path ? definition.line : location?.path === path ? location.line : undefined}
-            onChange={text => setDrafts(all => ({ ...all, [path]: { ...all[path], text } }))} onSave={() => save().catch(report)} />}
+            onChange={text => updateDrafts(all => ({ ...all, [path]: { ...all[path], text } }))} onSave={() => save().catch(report)} />}
         </div>)}
       </div>
     </div>
