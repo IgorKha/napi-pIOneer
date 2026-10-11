@@ -156,20 +156,24 @@ class HW:
         bus = self.bus(iface, "uart")
         rid = uart_id(bus.controller) + (":" + direction if direction != "both" else "")
         mode = "uart_" + direction if direction != "both" else "uart"
-        opener = self.hal.prepare_uart(bus.device, baud=baud)
-        with self._lock:
-            was_owned = rid in self.res.claims and owner in self.res.claims[rid].owners
-            self.res.claim(owner, owner_name, rid, mode)
-            hub = self._uart_hubs.get(bus.controller)
-            try:
-                if hub is None:
-                    hub = self._uart_hubs[bus.controller] = UARTHub(opener())
-                return hub.subscribe(owner, direction, baud)
-            except Exception:
-                if not was_owned: self.res.release(owner, rid)
-                if hub is not None and not hub.subscriptions:
-                    hub.close();self._uart_hubs.pop(bus.controller, None)
-                raise
+        opener = None
+        while True:
+            with self._lock:
+                hub = self._uart_hubs.get(bus.controller)
+                if hub is not None or opener is not None:
+                    was_owned = rid in self.res.claims and owner in self.res.claims[rid].owners
+                    self.res.claim(owner, owner_name, rid, mode)
+                    try:
+                        if hub is None:
+                            hub = self._uart_hubs[bus.controller] = UARTHub(opener())
+                        return hub.subscribe(owner, direction, baud)
+                    except Exception:
+                        if not was_owned: self.res.release(owner, rid)
+                        if hub is not None and not hub.subscriptions:
+                            hub.close();self._uart_hubs.pop(bus.controller, None)
+                        raise
+            # The hub can appear while scanning; recheck it under the lock.
+            opener = self.hal.prepare_uart(bus.device, baud=baud)
 
     def hardware_pwm(self, owner, owner_name, iface):
         bus = self.bus(iface, "pwm")

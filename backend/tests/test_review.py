@@ -657,3 +657,55 @@ def test_review_25_probe_runs_production_pwm_and_stops_promptly(monkeypatch):
         stop.set()
         thread.join(1)
     assert not thread.is_alive() and writes[-1] == value.INACTIVE
+
+
+def test_review_26_existing_uart_hub_skips_prepare(hw, monkeypatch):
+    prepare = hw.hal.prepare_uart
+    calls = []
+    monkeypatch.setattr(
+        hw.hal,
+        "prepare_uart",
+        lambda *args, **kwargs: (calls.append(args), prepare(*args, **kwargs))[1],
+    )
+    first = hw.uart("a", "a", "uart1", direction="rx")
+    hw.uart("b", "b", "uart1", direction="rx")
+    assert len(calls) == 1
+    with pytest.raises(ValueError):
+        hw.uart("a", "a", "uart1", baud=19200, direction="rx")
+    assert len(calls) == 1
+    hw.release("a")
+    hw.release("b")
+    hw.uart("c", "c", "uart1", direction="rx")
+    assert len(calls) == 2
+
+
+def test_review_26_concurrent_uart_prepares_open_one_hub(hw, monkeypatch):
+    barrier = threading.Barrier(2)
+    open_uart = hw.hal.open_uart
+    opened, errors = [], []
+
+    def prepare(device, baud):
+        barrier.wait(timeout=2)
+
+        def open_port():
+            opened.append(device)
+            return open_uart(device, baud=baud)
+
+        return open_port
+
+    monkeypatch.setattr(hw.hal, "prepare_uart", prepare)
+
+    def subscribe(owner):
+        try:
+            hw.uart(owner, owner, "uart1", direction="rx")
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=subscribe, args=(owner,)) for owner in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(3)
+    assert not errors and all(not thread.is_alive() for thread in threads)
+    assert len(opened) == 1
+    assert len(hw._uart_hubs["uart1"].subscriptions) == 2
