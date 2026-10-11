@@ -537,3 +537,27 @@ def test_review_22_uart_scan_does_not_hold_hw_lock(hw, monkeypatch):
         release.set()
         thread.join(2)
     assert not thread.is_alive() and not errors
+
+
+def test_review_23_spi_reopen_rejects_changed_settings(tmp_path):
+    from pioneer.board import load_board
+    from pioneer.config import REPO_ROOT
+    from pioneer.hal import BenchHAL
+    from pioneer.hw import HW
+    from pioneer.resources import ResourceManager, ResourceConflict
+
+    board = load_board(REPO_ROOT / "boards/napi-c.yaml", ["rk3308-spi2-spidev"])
+    hal = BenchHAL(board)
+    hw = HW(board, hal, ResourceManager(board))
+    try:
+        first = hw.spi("a", "a", "spi2", 0, mode=0, speed_hz=1000000)
+        assert hw.spi("a", "a", "spi2", 0) is first
+        for mode, speed in [(1, 1000000), (0, 2000000)]:
+            with pytest.raises(ResourceConflict, match="mode/speed_hz"):
+                hw.spi("a", "a", "spi2", 0, mode=mode, speed_hz=speed)
+        assert hw.spi("a", "a", "spi2", 0) is first
+        hw.release("a")
+        assert hw.spi("a", "a", "spi2", 0, mode=1, speed_hz=2000000) is not first
+    finally:
+        hw.close_all()
+        hal.close()

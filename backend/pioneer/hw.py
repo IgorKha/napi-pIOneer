@@ -51,6 +51,7 @@ class HW:
         self._handles: dict[str, SPIDevice | UARTPort | LedLine] = {}  # эксклюзивные открытые ресурсы
         self._lock = threading.RLock()
         self._uart_hubs = {}
+        self._spi_settings: dict[str, tuple[int, int]] = {}
         self._watchers: list[PinListener] = []  # все изменения входов (live-уровни для UI)
 
     def watch(self, cb: PinListener) -> None:
@@ -136,8 +137,15 @@ class HW:
     def spi(self, owner: str, owner_name: str, iface: str, cs: int, *, mode: int = 0,
             speed_hz: int = 1_000_000) -> SPIDevice:
         bus = self.bus(iface, "spi")
-        return self._exclusive(owner, owner_name, spi_id(bus.controller, cs), "spi",
-                               lambda: self.hal.open_spi(bus.number, cs, mode=mode, speed_hz=speed_hz))
+        rid = spi_id(bus.controller, cs)
+        with self._lock:
+            previous = self._spi_settings.get(rid)
+            if previous is not None and previous != (mode, speed_hz):
+                raise ResourceConflict("SPI уже открыт с другими mode/speed_hz; сначала освободите устройство")
+            handle = self._exclusive(owner, owner_name, rid, "spi",
+                                     lambda: self.hal.open_spi(bus.number, cs, mode=mode, speed_hz=speed_hz))
+            self._spi_settings[rid] = (mode, speed_hz)
+            return handle
 
     def uart(self, owner: str, owner_name: str, iface: str, *, baud: int = 9600, direction="both") -> UARTPort:
         from pioneer.hal.uart_hub import UARTHub
@@ -241,6 +249,7 @@ class HW:
         if rid in self._open:
             self._close_pin(rid, safe_value)
         elif h := self._handles.pop(rid, None):
+            self._spi_settings.pop(rid, None)
             h.close(bool(safe_value)) if isinstance(h, PwmLine) else h.close()
         # i2c: шина общая и остаётся открытой; захват адреса уже снят
 
