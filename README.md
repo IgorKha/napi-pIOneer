@@ -11,9 +11,9 @@
 ![Board](https://img.shields.io/badge/board-Napi--C%20(RK3308)-orange)
 ![OS](https://img.shields.io/badge/os-NapiLinux%200.3.x-informational)
 
-<img src="docs/mockups/ui-overview.webp" alt="Концепт интерфейса napi-pIOneer: граф нод, плата с подсвеченными пинами, AI-помощник" width="900">
+<img src="docs/screenshots/project-editor.webp" alt="Редактор проекта napi-pIOneer: граф нод «TM1637: секундомер», плата Napi-C с гребёнками J9/J10 и проводами от пинов к нодам" width="900">
 
-<sub>Концепт интерфейса. Реальная разводка пинов — в <a href="boards/napi-c.yaml"><code>boards/napi-c.yaml</code></a>.</sub>
+<sub>Редактор проекта: секундомер на дисплее TM1637 — интервал → счётчик → дисплей, плата с проводами от пинов J10-17/J10-18 к ноде. <a href="docs/mockups/ui-overview.webp">Концепт, с которого всё начиналось</a>.</sub>
 
 </div>
 
