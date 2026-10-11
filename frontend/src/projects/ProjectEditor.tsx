@@ -19,6 +19,7 @@ import { AIPanel } from "../ai/AIPanel";
 import type { AIArtifact } from "../ai/api";
 import { graphPreview, changeColor, edgeKey } from "./preview";
 
+import { SerialQueue } from "../serialQueue";
 import { loadSnapshot } from "../liveSnapshot";
 
 const nodeTypes = { pnode: GraphNodeView, board: BoardNodeView };
@@ -67,6 +68,9 @@ export const groupIdOf = (type: string) => (type.startsWith(GROUP_PREFIX) ? type
 
 function Editor({ socket, id, group, board, types, pinLive, live: projectLiveData, liveLog, liveStatus, resetLive, onError, onListChange }: EditorProps) {
   const [project, setProject] = useState<ProjectFull | null>(null);
+  const revision = useRef<number | null>(null);
+  const operations = useRef(new SerialQueue());
+  const acceptProject = useCallback((p: ProjectFull) => { revision.current = p.rev; setProject(p); }, []);
   const [groupName, setGroupName] = useState<string | null>(null);
   const [groupTargets, setGroupTargets] = useState<[string, string][]>([]); // входы, подключённые снаружи группы
   const live = useMemo(() => (group ? liveInside(projectLiveData, group.inst) : projectLiveData), [group, projectLiveData]);
@@ -95,9 +99,9 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
     ? Promise.all([api.project(id), api.group(group.gid)]).then(([p, g]) => {
         setGroupName(g.name);
         setGroupTargets(g.inputs.flatMap((i) => i.targets));
-        setProject({ ...p, graph: g.graph, rev: g.rev, node_types: g.node_types, validation: g.validation });
+        acceptProject({ ...p, graph: g.graph, rev: g.rev, node_types: g.node_types, validation: g.validation });
       })
-    : api.project(id).then(setProject)
+    : api.project(id).then(acceptProject)
   ).catch((e: Error) => {
     onError(e.message);
     navigate({ page: "projects", id: group ? id : undefined });
@@ -117,10 +121,12 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
   }, [id, running, resetLive, socket]);
 
   // ---- операции (spec 3.7a): сервер валидирует и применяет пакет атомарно
-  const send = useCallback(async (ops: Op[], history: "push" | "undo" | "redo" = "push", baseRev?: number) => {
-    if (!project || !ops.length) return;
+  const send = useCallback((input: Op[] | (() => Op[] | undefined), history: "push" | "undo" | "redo" = "push", baseRev?: number) => operations.current.run(async () => {
+    const ops = typeof input === "function" ? input() : input;
+    if (revision.current === null || !ops?.length) return;
     try {
-      const r = group ? await api.groupOps(group.gid, ops, baseRev ?? project.rev) : await api.projectOps(id, ops, baseRev ?? project.rev);
+      const r = group ? await api.groupOps(group.gid, ops, baseRev ?? revision.current) : await api.projectOps(id, ops, baseRev ?? revision.current);
+      revision.current = r.rev;
       const stack = history === "undo" ? redo : undo;
       stack.current.push(r.inverse);
       if (history === "push") redo.current = [];
@@ -138,15 +144,13 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
         await load(); // откатить оптимистичные перемещения
       }
     }
-  }, [id, group, project, load, onError]);
+  }), [id, group, load, onError]);
 
   const doUndo = useCallback(() => {
-    const ops = undo.current.pop();
-    if (ops) send(ops, "undo");
+    send(() => undo.current.pop(), "undo");
   }, [send]);
   const doRedo = useCallback(() => {
-    const ops = redo.current.pop();
-    if (ops) send(ops, "redo");
+    send(() => redo.current.pop(), "redo");
   }, [send]);
 
   const keys = useRef({ group: () => {}, tab: () => {} }); // обработчики ⌘G / Tab (заполняются ниже)

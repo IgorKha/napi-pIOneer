@@ -36,3 +36,15 @@ resolveNew({values:{fresh:2},nodes:{}}); await Promise.resolve();
 resolveOld({values:{stale:1},nodes:{error:'old'}}); await Promise.resolve();
 assert.deepEqual(received,[{values:{fresh:2},nodes:{}}]);
 console.log('review #19 reconnect snapshots: passed');
+
+// review #20: overlapping graph mutations use the preceding response revision.
+const {SerialQueue}=await import('../src/serialQueue.ts');
+const queue=new SerialQueue(); let rev=7, release;
+const calls=[];
+const first=queue.run(async()=>{calls.push(rev);await new Promise(r=>{release=r});rev=8;});
+const second=queue.run(async()=>{calls.push(rev);rev=9;});
+await Promise.resolve(); assert.deepEqual(calls,[7]);
+release(); await Promise.all([first,second]); assert.deepEqual(calls,[7,8]);
+await assert.rejects(queue.run(async()=>{throw new Error('failed');}));
+await queue.run(async()=>{calls.push(rev);}); assert.equal(calls.at(-1),9);
+console.log('review #20 serialized mutations: passed');
