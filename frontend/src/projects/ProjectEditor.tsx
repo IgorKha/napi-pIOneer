@@ -15,6 +15,9 @@ import { type FlowNode, GraphNodeView, type NodeActions } from "./GraphNode";
 import { Inspector } from "./Inspector";
 import { DND_TYPE, Palette } from "./Palette";
 import { BOARD_ID, canConnect, PIN_HANDLE, pinHandle, SOCKET_COLOR } from "./sockets";
+import { AIPanel } from "../ai/AIPanel";
+import type { AIArtifact } from "../ai/api";
+import { graphPreview, changeColor, edgeKey } from "./preview";
 
 const nodeTypes = { pnode: GraphNodeView, board: BoardNodeView };
 type AnyNode = FlowNode | BoardFlowNode;
@@ -67,6 +70,9 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
   const [nodes, setNodes] = useState<AnyNode[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tab, setTab] = useState<"inspector" | "ai">("inspector");
+  const [preview, setPreview] = useState<AIArtifact | null>(null);
+  const [highlightPin, setHighlightPin] = useState<string>();
   const undo = useRef<Op[][]>([]);
   const redo = useRef<Op[][]>([]);
   const [, bump] = useState(0); // перерисовать кнопки undo/redo
@@ -108,10 +114,10 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
   }, [id, running, resetLive]);
 
   // ---- операции (spec 3.7a): сервер валидирует и применяет пакет атомарно
-  const send = useCallback(async (ops: Op[], history: "push" | "undo" | "redo" = "push") => {
+  const send = useCallback(async (ops: Op[], history: "push" | "undo" | "redo" = "push", baseRev?: number) => {
     if (!project || !ops.length) return;
     try {
-      const r = group ? await api.groupOps(group.gid, ops, project.rev) : await api.projectOps(id, ops, project.rev);
+      const r = group ? await api.groupOps(group.gid, ops, baseRev ?? project.rev) : await api.projectOps(id, ops, baseRev ?? project.rev);
       const stack = history === "undo" ? redo : undo;
       stack.current.push(r.inverse);
       if (history === "push") redo.current = [];
@@ -172,6 +178,8 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
   }), [id, group, send, onError]);
 
   // ---- граф -> узлы/рёбра React Flow
+  const diff = useMemo(() => project && preview?.graph ? graphPreview(project.graph, preview.graph) : null, [project, preview]);
+
   // параметры-пины типа ноды (провод от платы к гнезду __pin:<параметр>)
   const pinParams = useCallback((type: string) => (schemas.get(type)?.params ?? []).filter((p) => p.kind === "pin").map((p) => p.name),
                                 [schemas]); // параметры-пины у динамических нод не бывают
@@ -179,7 +187,7 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
 
   useEffect(() => {
     if (!project) return;
-    const g = project.graph;
+    const g = diff?.graph ?? project.graph;
     const issues = [...project.validation.errors, ...project.validation.incomplete, ...project.validation.warnings];
     const used = new Set(g.nodes.flatMap((n) => pinParams(n.type).map((p) => n.params[p])).filter(Boolean) as string[]);
     const bv = g.view?.board ?? { position: [-420, 0] as [number, number], collapsed: false };
@@ -189,18 +197,20 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
       const old = new Map(prev.map((n) => [n.id, n]));
       const keep = <T extends AnyNode>(n: T): T => {
         const o = old.get(n.id);
-        return o ? ({ ...o, data: n.data, position: o.dragging ? o.position : n.position } as T) : n;
+        return o ? ({ ...o, data: n.data, style: n.style, position: o.dragging ? o.position : n.position } as T) : n;
       };
       const out: AnyNode[] = [keep<BoardFlowNode>({
         id: BOARD_ID, type: "board", position: { x: bv.position[0], y: bv.position[1] }, deletable: false,
-        data: { board, live: pinLive, used, collapsed: bv.collapsed,
+        data: { board, live: pinLive, used, collapsed: highlightPin ? false : bv.collapsed, highlightPin,
                 onCollapse: (c: boolean) => send([{ op: "collapse", node: BOARD_ID, collapsed: c }]) },
       })];
       for (const n of g.nodes) {
         out.push(keep<FlowNode>({
           id: n.id, type: "pnode", position: { x: n.position[0], y: n.position[1] },
+          style: preview ? { opacity: diff?.nodes.get(n.id) === "removed" ? 0.45 : 1, outline: diff?.nodes.has(n.id) ? `2px dashed ${changeColor[diff.nodes.get(n.id)!]}` : undefined, pointerEvents: "none" } : undefined,
           data: {
-            gnode: n, schema: schemaOf(n), board, live, running, actions,
+            projectId: id, nodePath: group ? `${group.inst}/${n.id}` : n.id,
+            gnode: n, schema: schemaOf(n), board, live: preview ? undefined : live, running: preview ? false : running, actions,
             connected: new Set([...g.edges.filter((e) => e.to[0] === n.id).map((e) => e.to[1]),
                                 ...groupTargets.filter((t) => t[0] === n.id).map((t) => t[1])]),
             issues: issues.filter((i) => i.node === n.id),
@@ -209,17 +219,17 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
       }
       return out;
     });
-  }, [project, schemaOf, board, pinLive, live, running, actions, send, pinParams, groupTargets]);
+  }, [project, preview, diff, highlightPin, id, group, schemaOf, board, pinLive, live, running, actions, send, pinParams, groupTargets]);
 
   const edges: Edge[] = useMemo(() => {
     if (!project) return [];
-    const g = project.graph;
+    const g = diff?.graph ?? project.graph;
     const out: Edge[] = g.edges.map((e) => {
       const type = schemaOf(g.nodes.find((n) => n.id === e.from[0]))?.outputs.find((o) => o.name === e.from[1])?.type ?? "Any";
       return {
         id: `${e.from.join(".")}->${e.to.join(".")}`, source: e.from[0], sourceHandle: e.from[1],
         target: e.to[0], targetHandle: e.to[1],
-        style: { stroke: SOCKET_COLOR[type], strokeWidth: 2, strokeDasharray: type === "Event" ? "5 4" : undefined },
+        style: { stroke: diff?.edges.has(edgeKey(e)) ? changeColor[diff.edges.get(edgeKey(e))!] : SOCKET_COLOR[type], strokeWidth: 2, opacity: diff?.edges.get(edgeKey(e)) === "removed" ? 0.45 : 1, strokeDasharray: diff?.edges.has(edgeKey(e)) || type === "Event" ? "5 4" : undefined },
       };
     });
     for (const n of g.nodes) for (const p of pinParams(n.type)) {
@@ -233,7 +243,7 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
       });
     }
     return out;
-  }, [project, schemaOf, pinLive, pinParams]);
+  }, [project, preview, diff, schemaOf, pinLive, pinParams]);
 
   // ---- события канваса
   const onNodesChange = useCallback((changes: NodeChange<AnyNode>[]) => {
@@ -303,6 +313,15 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
     if (n) flow.setCenter(n.position.x + 98, n.position.y + 40, { duration: 300, zoom: flow.getZoom() });
   }, [flow]);
 
+  const reference = (url: string) => {
+    if (url.startsWith("node:")) selectNode(url.slice(5));
+    if (url.startsWith("pin:") && board.pins.some((p) => p.id === url.slice(4))) {
+      setHighlightPin(url.slice(4));
+      const n = flow.getNode(BOARD_ID);
+      if (n) flow.setCenter(n.position.x + 220, n.position.y + 160, { duration: 300, zoom: 1 });
+    }
+  };
+
   // ---- запуск
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -317,7 +336,7 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
     }
   };
   const run = (action: "start" | "stop" | "apply") => act(() => api.projectRun(id, action));
-  const meta = (patch: { name?: string; description?: string; autostart?: boolean }) =>
+  const meta = (patch: { name?: string; description?: string; autostart?: boolean; save_state?: boolean }) =>
     act(() => api.projectUpdate(id, patch));
   const remove = () => {
     if (!project || !confirm(`Удалить проект «${project.name}»? Он будет остановлен.`)) return;
@@ -413,6 +432,8 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
           )}
           {!group && (
             <>
+              <a href={`/pioneer/api/projects/${id}/bundle.zip`} title="Граф, его Python-блоки и общие библиотеки" className="px-1.5 text-xs text-muted hover:text-fg">ZIP с блоками</a>
+              <a href={`/pioneer/api/projects/${id}/export`} title="Экспорт JSON (группы разворачиваются, Python-блоки переносятся отдельно)" className="px-1.5 text-xs text-muted hover:text-fg">Экспорт</a>
               <button onClick={() => act(async () => { const m = await api.projectDuplicate(id); navigate({ page: "projects", id: m.id }); })}
                       title="Дублировать" className="px-1.5 text-muted hover:text-fg">⧉</button>
               <button onClick={remove} aria-label="Удалить проект" title="Удалить" className="px-1.5 text-muted hover:text-err">🗑</button>
@@ -436,12 +457,13 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
                addNode(t, flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
              }}>
           <ReactFlow<AnyNode, Edge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode="dark"
+                     nodesDraggable={!preview} nodesConnectable={!preview} elementsSelectable={!preview}
                      onNodesChange={onNodesChange} onConnect={onConnect} onDelete={onDelete}
                      onNodeDragStop={onNodeDragStop} isValidConnection={isValidConnection}
                      onNodeDoubleClick={(_, n) => n.type === "pnode" && groupIdOf((n.data as { gnode: { type: string } }).gnode.type) && openGroup(n.id)}
                      selectionKeyCode="Shift" multiSelectionKeyCode={["Meta", "Control"]}
                      onPaneClick={() => setSelected(null)}
-                     deleteKeyCode={["Delete", "Backspace"]} onInit={(f) => setTimeout(() => f.fitView({ padding: 0.15, maxZoom: 1 }), 50)}
+                     deleteKeyCode={preview ? null : ["Delete", "Backspace"]} onInit={(f) => setTimeout(() => f.fitView({ padding: 0.15, maxZoom: 1 }), 50)}
                      minZoom={0.2} maxZoom={2} proOptions={{ hideAttribution: true }}
                      defaultEdgeOptions={{ interactionWidth: 14 }}>
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#3a3a3a" />
@@ -449,7 +471,14 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
             <MiniMap pannable zoomable style={{ width: 150, height: 96, background: "#232323" }} nodeColor={(n) => (n.type === "board" ? "#555" : (n.data as { schema?: NodeTypeSchema }).schema?.color ?? "#666")}
                      maskColor="rgba(0,0,0,0.5)" />
           </ReactFlow>
-          {project.graph.nodes.length === 0 && (
+          {preview && <div className="absolute left-3 top-3 rounded border border-accent bg-panel px-3 py-2 text-xs">
+            Предпросмотр AI · граф ещё не изменён
+            <div className="mt-1 flex gap-3">{(["added", "changed", "removed"] as const).map((kind, i) => <span key={kind} style={{color: changeColor[kind]}}>
+              {["Добавлено", "Изменено", "Удалено"][i]}: {[...(diff?.nodes.values() ?? [])].filter(v => v === kind).length}
+            </span>)}</div>
+            <button onClick={() => setPreview(null)} className="ml-3 text-accent">Скрыть</button>
+          </div>}
+          {!preview && project.graph.nodes.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div className="rounded border border-line bg-panel/90 px-5 py-4 text-center text-xs text-muted">
                 Перетащите ноду из палитры слева.<br />Пин назначается проводом от платы к ноде железа.
@@ -457,8 +486,20 @@ function Editor({ id, group, board, types, pinLive, live: projectLiveData, liveL
             </div>
           )}
         </div>
-        <Inspector project={project} node={selNode} schema={selNode ? schemaOf(selNode) : undefined} board={board}
-                   live={live} running={running} apply={(ops) => send(ops)} onSelect={selectNode} onMeta={meta} />
+        <div className="flex shrink-0 flex-col border-l border-line bg-panel">
+          {!group && <div className="flex gap-3 border-b border-line px-4 py-2 text-xs">
+            <button className={tab === "inspector" ? "text-accent" : "text-muted"} onClick={() => setTab("inspector")}>Инспектор</button>
+            <button className={tab === "ai" ? "text-accent" : "text-muted"} onClick={() => setTab("ai")}>AI-помощник</button>
+          </div>}
+          <div className={`min-h-0 flex-1 ${tab === "ai" && !group ? "hidden" : ""}`}>
+            <Inspector project={project} node={selNode} schema={selNode ? schemaOf(selNode) : undefined} board={board}
+                       live={live} running={running} apply={(ops) => { setPreview(null); send(ops); }} onSelect={selectNode} onMeta={meta} />
+          </div>
+          {!group && <div className={`min-h-0 flex-1 ${tab === "ai" ? "" : "hidden"}`}>
+            <AIPanel id={id} rev={project.rev} preview={preview} onPreview={(a) => { setPreview(a); if (a) setTimeout(() => flow.fitView({ padding: 0.2, maxZoom: 1 }), 100); }}
+                     onAccept={async (ops, rev) => { const result = await send(ops, "push", rev); if (result) setPreview(null); return !!result; }} onReference={reference} onError={onError} />
+          </div>}
+        </div>
       </div>
 
       <ProjectLog lines={log} onSelect={selectNode} />

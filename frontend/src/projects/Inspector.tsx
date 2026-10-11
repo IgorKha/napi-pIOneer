@@ -16,7 +16,7 @@ interface Props {
   running: boolean;
   apply: (ops: Op[]) => void;
   onSelect: (node: string) => void;
-  onMeta: (patch: { name?: string; description?: string; autostart?: boolean }) => void;
+  onMeta: (patch: { name?: string; description?: string; autostart?: boolean; save_state?: boolean }) => void;
 }
 
 /** Правая панель: выбранная нода (параметры, doc, live) или проект (настройки, проблемы графа). */
@@ -213,6 +213,11 @@ function ProjectPanel({ project, onSelect, onMeta, running }: Props) {
         <input type="checkbox" checked={project.autostart} onChange={(e) => onMeta({ autostart: e.target.checked })} className="accent-accent" />
         Автозапуск при старте платы
       </label>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" checked={project.save_state ?? false} onChange={(e) => onMeta({ save_state: e.target.checked })} className="accent-accent" />
+        Сохранять состояние нод
+      </label>
+      <p className="text-[10px] text-muted">Счётчик, Toggle и SR: при остановке и каждые 10 с. Сохранённый Bool может включить подключённый выход при запуске. Изменение параметров сбрасывает состояние ноды.</p>
       <section>
         <h3 className="mb-1.5 font-semibold uppercase tracking-wide text-muted">Проверка графа</h3>
         {issues.length === 0 ? (

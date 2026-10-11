@@ -70,6 +70,12 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
     }, (e: Error) => setLoadError(e.message));
   }, []);
 
+  useEffect(() => {
+    const reload = () => { api.board().then(setBoard, (e: Error) => setLoadError(e.message)); };
+    window.addEventListener("pioneer-board-changed", reload);
+    return () => window.removeEventListener("pioneer-board-changed", reload);
+  }, []);
+
   const showError = useCallback((msg: string) => {
     setToast(msg);
     window.setTimeout(() => setToast((t) => (t === msg ? null : t)), 6000);
@@ -121,7 +127,7 @@ function Main({ onLogout, onUnauthorized }: { onLogout: () => void; onUnauthoriz
           <BlocksPage board={liveBoard} selected={route.id} onError={showError} />
         </Suspense>
       ) : route.page === "secrets" ? (
-        <SecretsPage onError={showError} />
+        <SecretsPage section={route.section} onError={showError} />
       ) : route.page === "help" ? (
         <Suspense fallback={<div className="p-8 text-muted">Загрузка…</div>}>
           <HelpPage section={route.section} anchor={route.anchor} />

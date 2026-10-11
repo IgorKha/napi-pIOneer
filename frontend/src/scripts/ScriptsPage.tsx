@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Board, type LogLine, type ScriptFull, type ScriptMeta, type ScriptStatus } from "../api";
 import { errorArticle, useHelp } from "../help/useHelp";
 import { href, navigate } from "../route";
-import { CodeEditor } from "./CodeEditor";
+import { AIPanel } from "../ai/AIPanel";
+import { ai } from "../ai/api";
+import { CodeWorkspace, type WorkspaceHandle } from "./CodeWorkspace";
 
 const STATE: Record<ScriptStatus["state"], [string, string]> = {
   running: ["bg-ok", "работает"],
@@ -21,6 +23,12 @@ interface Props {
 
 export function ScriptsPage({ board, selected, liveLogs, liveStatus, onError }: Props) {
   const [list, setList] = useState<ScriptMeta[]>([]);
+  const [libraries, setLibraries] = useState<{id: string; name: string}[]>([]);
+  const [library, setLibrary] = useState<string | null>(null);
+  const [libraryName, setLibraryName] = useState("");
+  const reloadLibraries = () => api.codeLibraries().then(setLibraries, (e: Error) => onError(e.message));
+  useEffect(() => { reloadLibraries(); }, []);
+  useEffect(() => { setLibrary(null); }, [selected]);
   const reload = useCallback(() => api.scripts().then(setList, (e: Error) => onError(e.message)), [onError]);
   useEffect(() => { reload(); }, [reload]);
 
@@ -64,9 +72,23 @@ export function ScriptsPage({ board, selected, liveLogs, liveStatus, onError }: 
           })}
           {list.length === 0 && <li className="px-3 py-2 text-xs text-muted">Пока нет скриптов</li>}
         </ul>
+        <div className="border-t border-line p-3 text-xs">
+          <div className="mb-2 flex justify-between text-muted"><span>Общие библиотеки</span>
+            <button onClick={async () => {
+              const name = libraryName.trim();
+              if (!name) return;
+              try { await api.codeLibraryCreate(name); await reloadLibraries(); setLibrary(name); setLibraryName(""); }
+              catch (e) { onError((e as Error).message); }
+            }}>+ новая</button>
+          </div>
+          <input aria-label="Имя новой библиотеки" placeholder="filters" value={libraryName} onChange={e => setLibraryName(e.target.value)} className="mb-2 w-full rounded border border-line bg-bg p-1" />
+          {libraries.map(l => <button key={l.id} className={`block w-full rounded px-2 py-1 text-left ${library === l.id ? "bg-panel-2" : ""}`} onClick={() => setLibrary(l.id)}>{l.name}</button>)}
+          {library && <button className="mt-2 text-accent" onClick={() => setLibrary(null)}>← Скрипт</button>}
+        </div>
       </aside>
 
-      {selected ? (
+      {library ? <div className="min-w-0 flex-1"><CodeWorkspace key={library} kind="lib" id={library} board={board}
+        onError={onError} onSaved={reloadLibraries} onDirty={() => {}} /></div> : selected ? (
         <ScriptView key={selected} id={selected} board={board} liveLog={liveLogs[selected]}
                     liveStatus={liveStatus[selected]} onError={onError} onListChange={reload} />
       ) : (
@@ -83,21 +105,20 @@ function ScriptView({ id, board, liveLog, liveStatus, onError, onListChange }: {
   onError: (m: string) => void; onListChange: () => void;
 }) {
   const [script, setScript] = useState<ScriptFull | null>(null);
-  const [code, setCode] = useState("");
-  const [saved, setSaved] = useState("");
+  const workspace = useRef<WorkspaceHandle>(null);
+  const [showAI, setShowAI] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [location, setLocation] = useState<{path: string; line: number} | null>(null);
   const [busy, setBusy] = useState(false);
   const logStart = useRef(0); // сколько строк live-лога уже было до загрузки истории
 
   useEffect(() => {
     api.script(id).then((s) => {
       setScript(s);
-      setCode(s.code);
-      setSaved(s.code);
       logStart.current = liveLog?.length ?? 0;
     }, (e: Error) => { onError(e.message); navigate({ page: "scripts" }); });
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const dirty = code !== saved;
   const status = liveStatus ?? script?.status;
   const running = status?.state === "running";
   // история из GET + то, что пришло по WS после загрузки
@@ -115,13 +136,11 @@ function ScriptView({ id, board, liveLog, liveStatus, onError, onListChange }: {
     }
   };
   const save = () => act(async () => {
-    await api.scriptUpdate(id, { code });
-    setSaved(code);
+    await workspace.current?.save();
   });
   const run = (action: "start" | "stop" | "restart") => act(async () => {
     if (dirty && action !== "stop") {
-      await api.scriptUpdate(id, { code });
-      setSaved(code);
+      await workspace.current?.save();
     }
     await api.scriptRun(id, action);
     onListChange();
@@ -164,7 +183,14 @@ function ScriptView({ id, board, liveLog, liveStatus, onError, onListChange }: {
           <input type="checkbox" checked={script.autostart} onChange={toggleAuto} className="accent-accent" />
           автозапуск
         </label>
+        <label className="flex items-center gap-1.5 text-xs text-muted">
+          <input type="checkbox" checked={script.restart_on_save} onChange={() => act(async () => {
+            const m = await api.scriptUpdate(id, {restart_on_save: !script.restart_on_save});
+            setScript(s => s ? {...s, ...m} : s);
+          })} />перезапуск при сохранении
+        </label>
         <div className="ml-auto flex items-center gap-1.5">
+          <button onClick={() => setShowAI(!showAI)} aria-pressed={showAI} className={`rounded px-3 py-1 text-xs ${showAI ? "bg-accent text-white" : "bg-panel-2"}`}>AI</button>
           <button onClick={save} disabled={!dirty || busy}
                   className="rounded bg-panel-2 px-3 py-1 text-xs hover:bg-[#3a3a3a] disabled:opacity-40"
                   title="⌘S / Ctrl+S">
@@ -194,15 +220,27 @@ function ScriptView({ id, board, liveLog, liveStatus, onError, onListChange }: {
         </div>
       )}
 
-      <div className="min-h-0 flex-1">
-        <CodeEditor value={script.code} board={board} onChange={setCode} onSave={() => dirty && save()} />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1"><CodeWorkspace ref={workspace} kind="scripts" id={id} board={board} onError={onError}
+          onDirty={setDirty} location={location} onSaved={() => { api.script(id).then(fresh => setScript(old => old ? {...fresh, log: old.log} : fresh), (e: Error) => onError(e.message)); onListChange(); }}
+          onRun={async file => { await api.scriptRun(id, "stop"); await api.scriptRun(id, "start", file); onListChange(); }} /></div>
+        <div className="h-full border-l border-line" style={{display: showAI ? "block" : "none"}}>
+          <AIPanel id={`script:${id}`} rev={0} preview={null} onPreview={() => {}} onAccept={async () => false}
+            onReference={url => { if (url.startsWith("pin:")) navigate({page: "board"}); }} onError={onError}
+            beforeSend={async () => { await workspace.current?.save(); }}
+            onFileSave={async (artifact, code) => {
+              await workspace.current?.save();
+              const result = await ai.acceptFile(`script:${id}`, artifact.id, code);
+              await workspace.current?.refreshFile(result.path);
+            }} />
+        </div>
       </div>
-      <LogPanel lines={log} />
+      <LogPanel lines={log} onLocation={(path, line) => setLocation({path, line})} />
     </div>
   );
 }
 
-function LogPanel({ lines }: { lines: LogLine[] }) {
+function LogPanel({ lines, onLocation }: { lines: LogLine[]; onLocation: (path: string, line: number) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true); // прилипать к низу, пока пользователь не прокрутил вверх
   const [clearedAt, setClearedAt] = useState(0);
@@ -228,7 +266,10 @@ function LogPanel({ lines }: { lines: LogLine[] }) {
         {shown.map((l, i) => (
           <div key={i} className={`flex gap-3 whitespace-pre-wrap ${l.stream === "err" ? "text-[#f0b0b0]" : l.stream === "sys" ? "text-muted italic" : ""}`}>
             <span className="shrink-0 text-muted/70 tabular-nums">{new Date(l.t * 1000).toLocaleTimeString("ru-RU")}</span>
-            <span className="min-w-0">{l.text}</span>
+            <span className="min-w-0">{(() => {
+              const match = /File "([^"/][^"]*)", line (\d+)/.exec(l.text);
+              return match ? <button className="text-left underline" onClick={() => onLocation(match[1], Number(match[2]))}>{l.text}</button> : l.text;
+            })()}</span>
             {l.stream !== "out" && (anchor = errorArticle(help, l.text)) && (
               <a href={href({ page: "help", section: "errors", anchor })} title="Что это значит — справка"
                  className="shrink-0 rounded bg-panel-2 px-1.5 not-italic text-muted hover:text-fg">?</a>

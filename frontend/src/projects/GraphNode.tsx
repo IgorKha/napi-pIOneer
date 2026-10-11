@@ -10,6 +10,8 @@ export interface NodeActions {
 }
 
 export type FlowNodeData = {
+  projectId: string;
+  nodePath: string;
   gnode: GNode;
   schema: NodeTypeSchema | undefined;
   connected: Set<string>;
@@ -93,6 +95,14 @@ export const GraphNodeView = memo(function GraphNodeView({ data, selected }: Nod
             );
           })}
           <Body data={data} />
+          {running && schema.outputs.filter((s) => s.type === "Image").map((s) => {
+            const value = live?.values[`${gnode.id}.${s.name}`];
+            const meta = value?.v as { image?: number } | null | undefined;
+            if (!meta?.image) return null;
+            const query = new URLSearchParams({ node: data.nodePath, output: s.name, t: String(value?.t ?? "") });
+            return <img key={s.name} src={`/pioneer/api/projects/${encodeURIComponent(data.projectId)}/image?${query}`}
+                        alt={s.title} className="nodrag mx-2 max-h-36 rounded object-contain" loading="lazy" />;
+          })}
           {schema.inputs.map((s) => (
             <InputRow key={s.name} s={s} gnode={gnode} connected={connected.has(s.name)}
                       onCommit={(v) => actions.inline(gnode.id, s.name, v)} />
@@ -207,6 +217,8 @@ function Body({ data }: { data: FlowNodeData }) {
     return <NumberControl value={Number(view?.value ?? gnode.params.initial ?? 0)} disabled={disabled} hint={hint} onChange={send} />;
   }
   if (id === "builtin.watch") return <WatchView view={view} running={running} />;
+  if (id === "builtin.save_image" && running && typeof view?.download === "string")
+    return <a href={view.download} download className="nodrag mx-3 text-accent underline">Скачать изображение</a>;
   if (id === "builtin.tm1637" && running && typeof view?.frame_ms === "number")
     return <div className="px-3 text-[10.5px] text-muted">кадр {view.frame_ms} мс</div>;
   return null;

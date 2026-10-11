@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "test": "node --experimental-strip-types tests/content.mjs"
   },
   "dependencies": {
     "@xyflow/react": "12.12.0",

@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type BlockFull, type BlockMeta, type Board } from "../api";
 import { href, navigate } from "../route";
-import { CodeEditor } from "../scripts/CodeEditor";
+import { AIPanel } from "../ai/AIPanel";
+import { ai } from "../ai/api";
+import { CodeWorkspace, type WorkspaceHandle } from "../scripts/CodeWorkspace";
 
 interface Props {
   board: Board | null;
@@ -67,20 +69,23 @@ function BlockView({ id, board, onError, onListChange }: {
   id: string; board: Board | null; onError: (m: string) => void; onListChange: () => void;
 }) {
   const [block, setBlock] = useState<BlockFull | null>(null);
-  const [code, setCode] = useState("");
+  const workspace = useRef<WorkspaceHandle>(null);
+  const [showAI, setShowAI] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    api.block(id).then((b) => { setBlock(b); setCode(b.code); },
+    api.block(id).then((b) => { setBlock(b); },
                        (e: Error) => { onError(e.message); navigate({ page: "blocks" }); });
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const dirty = block !== null && code !== block.code;
   const save = async (name?: string) => {
     if (!block) return;
     setBusy(true);
     try {
-      const m = await api.blockSave(id, code, name);
-      setBlock({ ...block, ...m, code });
+      await workspace.current?.save();
+      const fresh = await api.block(id);
+      if (name) await api.blockSave(id, fresh.code, name);
+      setBlock(await api.block(id));
       onListChange();
     } catch (e) {
       onError((e as Error).message);
@@ -114,6 +119,7 @@ function BlockView({ id, board, onError, onListChange }: {
           ))}
         </span>
         <div className="ml-auto flex items-center gap-1.5">
+          <button onClick={() => setShowAI(!showAI)} aria-pressed={showAI} className={`rounded px-3 py-1 text-xs ${showAI ? "bg-accent text-white" : "bg-panel-2"}`}>AI-помощник</button>
           <button onClick={() => save()} disabled={!dirty || busy} title="⌘S / Ctrl+S — сохранить и проверить"
                   className="rounded bg-accent px-3 py-1 text-xs text-white disabled:opacity-40">
             {busy ? "Проверяю…" : dirty ? "Сохранить •" : "Сохранено"}
@@ -126,8 +132,19 @@ function BlockView({ id, board, onError, onListChange }: {
           {block.error}{block.types.length > 0 && <span className="text-muted"> — в палитре остаётся прошлая версия</span>}
         </div>
       )}
-      <div className="min-h-0 flex-1">
-        <CodeEditor value={block.code} board={board} onChange={setCode} onSave={() => save()} />
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1"><CodeWorkspace ref={workspace} kind="blocks" id={id} board={board} onError={onError} onDirty={setDirty}
+          onSaved={() => { api.block(id).then(setBlock, (e: Error) => onError(e.message)); onListChange(); }} /></div>
+        {showAI && <div className="h-full border-l border-line">
+          <AIPanel id={`block:${id}`} rev={0} preview={null} onPreview={() => {}} onAccept={async () => false}
+            onReference={url => { if (url.startsWith("pin:")) navigate({page: "board"}); }} onError={onError}
+            beforeSend={async () => { await workspace.current?.save(); }}
+            onFileSave={async (artifact, code) => {
+              await workspace.current?.save();
+              const result = await ai.acceptFile(`block:${id}`, artifact.id, code);
+              await workspace.current?.refreshFile(result.path);
+            }} />
+        </div>}
       </div>
     </div>
   );

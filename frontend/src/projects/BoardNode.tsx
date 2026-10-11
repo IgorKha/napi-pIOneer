@@ -9,6 +9,7 @@ export type BoardNodeData = {
   used: Set<string>; // пины этого проекта
   collapsed: boolean;
   onCollapse: (c: boolean) => void;
+  highlightPin?: string;
 };
 
 export type BoardFlowNode = Node<BoardNodeData, "board">;
@@ -17,7 +18,7 @@ const ROW = 19;
 
 /** Board-нода (spec 4.1): гребёнки в физическом расположении; с пина тянется провод к ноде железа. */
 export const BoardNodeView = memo(function BoardNodeView({ data }: NodeProps<BoardFlowNode>) {
-  const { board, live, used, collapsed, onCollapse } = data;
+  const { board, live, used, collapsed, onCollapse, highlightPin } = data;
   const byId = new Map(board.pins.map((p) => [p.id, p]));
   return (
     <div className="rounded-md border border-[#151515] bg-[#262626] text-[10.5px] shadow-lg shadow-black/40">
@@ -49,7 +50,7 @@ export const BoardNodeView = memo(function BoardNodeView({ data }: NodeProps<Boa
                     const wireable = pin.kind === "gpio" || pin.kind === "adc";
                     const left = side === 0;
                     return (
-                      <div key={n} className={`relative flex w-[92px] items-center gap-1 ${left ? "flex-row-reverse pr-1" : "pl-1"}`}
+                      <div key={n} className={`relative flex w-[92px] items-center gap-1 ${highlightPin === pin.id ? "bg-accent/30 ring-1 ring-accent" : ""} ${left ? "flex-row-reverse pr-1" : "pl-1"}`}
                            title={`${pin.id} · ${look.label}`}>
                         <span className={`relative size-[11px] shrink-0 rounded-full border ${used.has(pin.id) ? "ring-2 ring-accent/70" : ""}`}
                               style={{ background: look.fill, borderColor: look.stroke }}>

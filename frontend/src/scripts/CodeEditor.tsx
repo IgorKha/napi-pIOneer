@@ -4,6 +4,7 @@ import "monaco-editor/languages/definitions/python/register.js";
 // через inlineCompletions) — подключаем все фичи редактора, но только язык Python
 import "monaco-editor/features/register.all.js";
 import EditorWorker from "monaco-editor/editor/editor.worker.start.js?worker";
+import {languageProviders, type Scope} from "./language";
 import { useEffect, useRef } from "react";
 import type { Board, HelpReference, SdkDoc, SdkMember, SdkSymbol } from "../api";
 import { loadHelp } from "../help/useHelp";
@@ -29,8 +30,8 @@ let reference: HelpReference | null = null;
 loadHelp().then((r) => (reference = r), () => {});
 
 const PIN_CTOR = /\b(Output|Input|Pwm|Adc)\(\s*["']([^"']*)$/;
-const BUS_CTOR = /\b(I2C|SPI|UART)\(\s*["']([^"']*)$/;
-const BUS_KIND: Record<string, string> = { I2C: "i2c", SPI: "spi", UART: "uart" };
+const BUS_CTOR = /\b(I2C|SPI|UART|HardwarePwm)\(\s*["']([^"']*)$/;
+const BUS_KIND: Record<string, string> = { I2C: "i2c", SPI: "spi", UART: "uart", HardwarePwm: "pwm" };
 
 function docMarkdown(d: SdkDoc & { signature: string }, name?: string): monaco.IMarkdownString {
   const parts = ["```python\n" + (name ? `${name}.` : "") + d.signature + "\n```", d.summary];
@@ -176,12 +177,16 @@ monaco.languages.registerSignatureHelpProvider("python", {
 
 interface Props {
   value: string;
+  analysis?: Scope;
+  onDefinition?: (location:{path:string;line:number}) => void;
+  language?: string;
+  line?: number;
   board: Board | null;
   onChange: (v: string) => void;
   onSave: () => void;
 }
 
-export function CodeEditor({ value, board, onChange, onSave }: Props) {
+export function CodeEditor({ value, board, onChange, onSave, language = "python", line, analysis, onDefinition }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const handlers = useRef({ onChange, onSave });
@@ -190,8 +195,7 @@ export function CodeEditor({ value, board, onChange, onSave }: Props) {
 
   useEffect(() => {
     const ed = monaco.editor.create(host.current!, {
-      value,
-      language: "python",
+      model: monaco.editor.createModel(value, language, analysis ? monaco.Uri.parse(`pioneer://code/${analysis.kind}/${analysis.id}/${analysis.path}`) : undefined),
       theme: "pioneer-dark",
       automaticLayout: true,
       fontSize: 13,
@@ -210,9 +214,25 @@ export function CodeEditor({ value, board, onChange, onSave }: Props) {
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => handlers.current.onSave());
     editor.current = ed;
     if (import.meta.env.DEV) (window as unknown as { __editor: unknown }).__editor = ed; // отладка/проверки
-    return () => ed.dispose();
+    const cleanupAnalysis = analysis && language === "python" ? languageProviders(ed.getModel()!, analysis) : undefined;
+    const opener = analysis ? monaco.editor.registerEditorOpener({openCodeEditor(_source, resource, selection) {
+      const prefix = `/${analysis.kind}/${analysis.id}/`;
+      if (resource.scheme !== 'pioneer' || !resource.path.startsWith(prefix)) return false;
+      const line = selection && ('startLineNumber' in selection ? selection.startLineNumber : selection.lineNumber);
+      onDefinition?.({path:resource.path.slice(prefix.length),line:line || 1});
+      return true;
+    }}) : undefined;
+    return () => {cleanupAnalysis?.(); opener?.dispose(); const model=ed.getModel();ed.dispose();model?.dispose();};
     // value — только начальное; смену скрипта делаем через key у компонента
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (line && editor.current) {
+      editor.current.revealLineInCenter(line);
+      editor.current.setPosition({ lineNumber: line, column: 1 });
+      editor.current.focus();
+    }
+  }, [line]);
 
   return <div ref={host} className="h-full min-h-0 w-full" />;
 }

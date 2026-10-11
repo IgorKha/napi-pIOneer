@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type MqttSettings, type MqttState } from "./api";
+import { KernelDriversPage } from "./KernelDriversPage";
+import {ModulesPage} from "./ModulesPage";
+import { SystemPage } from "./SystemPage";
+import { AISettings } from "./ai/AISettings";
 
 /** Настройки: MQTT (idea 003) и секреты (spec 6): значения только записываются; в проектах — ссылки {{secret:имя}}. */
-export function SecretsPage({ onError }: { onError: (msg: string) => void }) {
+export function SecretsPage({ onError, section = "mqtt" }: { onError: (msg: string) => void; section?: "mqtt" | "ai" | "secrets" | "drivers" | "system" | "modules" }) {
   const [names, setNames] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
@@ -13,9 +17,21 @@ export function SecretsPage({ onError }: { onError: (msg: string) => void }) {
     api.secretsUpdate(patch).then((r) => setNames(r.names), (e: Error) => onError(e.message));
 
   return (
-    <div className="mx-auto w-full max-w-xl overflow-auto p-8 text-sm">
-      <MqttSection onError={onError} secretNames={names} />
-      <h2 className="mt-10 mb-1 text-base font-semibold">Секреты</h2>
+    <div className="flex min-h-0 w-full text-sm">
+      <nav aria-label="Разделы настроек" className="w-48 shrink-0 border-r border-line bg-panel p-3">
+        <h1 className="mb-3 px-2 font-semibold">Настройки</h1>
+        {([["mqtt", "MQTT"], ["ai", "AI"], ["secrets", "Секреты"], ["drivers", "Драйверы"], ["modules", "Модули"], ["system", "Система"]] as const).map(([key, title]) =>
+          <a key={key} href={`#/secrets/${key}`} aria-current={section === key ? "page" : undefined}
+            className={`mb-1 block rounded px-3 py-2 ${section === key ? "bg-panel-2 text-fg" : "text-muted hover:text-fg"}`}>{title}</a>)}
+      </nav>
+      <div className="min-w-0 flex-1 overflow-auto p-8"><div className="max-w-xl">
+      {section === "mqtt" && <MqttSection onError={onError} secretNames={names} />}
+      {section === "modules" && <ModulesPage />}
+      {section === "system" && <SystemPage />}
+      {section === "drivers" && <KernelDriversPage onError={onError} />}
+      {section === "ai" && <AISettings onError={onError} />}
+      {section === "secrets" && <>
+      <h2 className="mb-1 text-lg font-semibold">Секреты</h2>
       <p className="mb-5 text-muted">
         Токены и пароли для нод «HTTP-запрос», «Входящий webhook» и т.п. Хранятся только на плате (файл с правами 600),
         в браузер не возвращаются. В параметрах нод пишите ссылку <code className="font-mono text-fg">{"{{secret:имя}}"}</code>.
@@ -50,6 +66,8 @@ export function SecretsPage({ onError }: { onError: (msg: string) => void }) {
         {names.length === 0 && <li className="px-3 py-2 text-muted">Пока нет секретов</li>}
       </ul>
       <p className="mt-3 text-xs text-muted">Чтобы сменить значение — сохраните секрет с тем же именем.</p>
+      </>}
+      </div></div>
     </div>
   );
 }

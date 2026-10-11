@@ -40,7 +40,7 @@ export function PinInspector({ board, pin, live, bench, onError, onHighlight }: 
         <div className="font-mono text-base font-semibold">{pin.id}</div>
         <div className="text-muted">
           {pin.name ?? pin.special ?? pin.power?.toUpperCase()}
-          {pin.gpio && <span className="font-mono"> · gpiochip{pin.gpio.chip}:{pin.gpio.line}</span>}
+          {pin.gpio && <span className="font-mono"> · gpio{pin.gpio.chip}:{pin.gpio.line}</span>}
         </div>
       </header>
 
@@ -95,7 +95,7 @@ export function PinInspector({ board, pin, live, bench, onError, onHighlight }: 
           <Section title="Свойства">
             <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
               {pin.default_pull && (<><dt className="text-muted">Подтяжка</dt>
-                <dd>{PULL_LABEL[pin.default_pull]} <span className="text-muted">— аппаратная, софтом не меняется</span></dd></>)}
+                <dd>{PULL_LABEL[pin.default_pull]} <span className="text-muted">— по умолчанию; изменение через DT и перезагрузку</span></dd></>)}
               {pin.drive_ma && (<><dt className="text-muted">Ток выхода</dt><dd>{pin.drive_ma} мА</dd></>)}
               {pin.alt.length > 0 && (<><dt className="text-muted">Альтернативы</dt><dd className="font-mono">{pin.alt.join(", ")}</dd></>)}
             </dl>
@@ -171,9 +171,9 @@ function OtherFunctions({ board, pin, onError, onHighlight }: {
   const preview = async (target: string) => {
     const t = board.interfaces.find((i) => i.id === target)!;
     // Включить target: выключить включённые конфликтующие. Выключить: только его.
-    const req = t.enabled
+    const req = t.enabled_in_uenv
       ? api.plan([], [target])
-      : api.plan([target], t.conflicts.filter((c) => board.interfaces.find((i) => i.id === c)?.enabled));
+      : api.plan([target], t.conflicts.filter((c) => board.interfaces.find((i) => i.id === c)?.enabled_in_uenv));
     try {
       setPlan({ target, plan: await req });
     } catch (e) {
@@ -183,7 +183,7 @@ function OtherFunctions({ board, pin, onError, onHighlight }: {
 
   return (
     <Section title="Другие функции пина">
-      <p className="mb-2 text-xs text-muted">Меняются оверлеем в uEnv.txt и перезагрузкой. Применение — в фазе 3, сейчас только предпросмотр.</p>
+      <p className="mb-2 text-xs text-muted">Меняются оверлеем в uEnv.txt. Сначала diff и бэкап, перезагрузка — отдельным действием.</p>
       <ul className="flex flex-col gap-1">
         {pin.interface_options.map(({ id, role }) => {
           const i = board.interfaces.find((x) => x.id === id)!;
@@ -195,19 +195,20 @@ function OtherFunctions({ board, pin, onError, onHighlight }: {
               <span className="text-muted">{role} · {Object.keys(i.pins).join(", ")}</span>
               {!i.locked && (
                 <button className="ml-auto text-xs text-accent hover:underline" onClick={() => preview(id)}>
-                  {i.enabled ? "выключить?" : "включить?"}
+                  {i.enabled_in_uenv ? "выключить?" : "включить?"}
                 </button>
               )}
             </li>
           );
         })}
       </ul>
-      {plan && <PlanView board={board} target={plan.target} plan={plan.plan} />}
+      {plan && <PlanView key={plan.plan.hash ?? plan.target} board={board} target={plan.target} plan={plan.plan} onError={onError} />}
     </Section>
   );
 }
 
-function PlanView({ board, target, plan }: { board: Board; target: string; plan: InterfacePlan }) {
+function PlanView({ board, target, plan, onError }: { board: Board; target: string; plan: InterfacePlan; onError: (m: string) => void }) {
+  const [confirmed, setConfirmed] = useState(false), [busy, setBusy] = useState(false), [backup, setBackup] = useState("");
   const title = (id: string) => board.interfaces.find((i) => i.id === id)?.title ?? id;
   const added = plan.overlays.filter((o) => !board.overlays.includes(o));
   const removed = board.overlays.filter((o) => !plan.overlays.includes(o));
@@ -227,6 +228,32 @@ function PlanView({ board, target, plan }: { board: Board; target: string; plan:
         {added.map((o) => <div key={o} className="text-ok">+ {o}</div>)}
       </div>
       {plan.needs_reboot && <p className="mt-2 text-warn">Нужна перезагрузка платы.</p>}
+      {plan.diff && <pre className="my-2 max-h-36 overflow-auto whitespace-pre-wrap text-[10px]">{plan.diff}</pre>}
+      {plan.missing?.length ? <p className="text-err">Отсутствуют .dtbo: {plan.missing.join(", ")}</p> : null}
+      {Object.keys(plan.claims ?? {}).length > 0 && <p className="text-err">Сначала остановите владельцев: {Object.values(plan.claims ?? {}).flatMap((v) => Object.values(v)).join(", ")}</p>}
+      {plan.writable && plan.needs_reboot && !backup && <>
+        <p className="mt-2 text-muted">Восстановление при ошибке загрузки: microSD с системой, UART0 1 500 000 бод; крайний вариант — maskrom + rkdeveloptool.</p>
+        <label className="my-2 flex gap-2"><input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />Подтверждаю diff и изменение функций пинов</label>
+        <button disabled={!confirmed || busy || !!plan.missing?.length || Object.keys(plan.claims ?? {}).length > 0} className="rounded bg-accent px-2 py-1 text-white disabled:opacity-40" onClick={async () => {
+          setBusy(true);
+          try {
+            const r = await fetch("/pioneer/api/board/interfaces/apply", { method: "POST", headers: { "X-Pioneer": "1", "Content-Type": "application/json" }, body: JSON.stringify({ enable: plan.enable, disable: plan.disable, hash: plan.hash, confirmed }) });
+            const result = await r.json(); if (!r.ok) throw new Error(result.detail ?? `HTTP ${r.status}`);
+            setBackup(result.backup ?? "Изменений нет");
+            window.dispatchEvent(new Event("pioneer-board-changed"));
+          } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+        }}>Записать uEnv с бэкапом</button>
+      </>}
+      {backup && <><p className="mt-2 break-all text-muted">Бэкап: {backup}</p>
+        <button className="mt-2 rounded bg-warn px-2 py-1 text-bg" disabled={busy || board.hal !== "linux"} onClick={async () => {
+          if (!confirm("Перезагрузить плату? Все проекты и скрипты остановятся; затем включатся новые интерфейсы и автозапуск.")) return;
+          setBusy(true);
+          try {
+            const r = await fetch("/pioneer/api/board/reboot", { method: "POST", headers: { "X-Pioneer": "1", "Content-Type": "application/json" }, body: JSON.stringify({ confirmation: "REBOOT" }) });
+            if (!r.ok) throw new Error(`Перезагрузка: HTTP ${r.status}`);
+          } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+        }}>Перезагрузить плату</button>
+      </>}
     </div>
   );
 }

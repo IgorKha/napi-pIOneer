@@ -107,6 +107,8 @@ export interface ScriptMeta {
   id: string;
   name: string;
   autostart: boolean;
+  entry: string;
+  restart_on_save: boolean;
   created: number;
   updated: number;
   status: ScriptStatus;
@@ -124,6 +126,11 @@ export interface ScriptFull extends ScriptMeta {
 }
 
 export interface InterfacePlan {
+  writable?: boolean;
+  hash?: string | null;
+  diff?: string;
+  missing?: string[];
+  claims?: Record<string, Record<string, string>>;
   overlays: string[];
   enable: string[];
   disable: string[];
@@ -163,6 +170,8 @@ async function call<T>(path: string, body?: unknown, method?: string): Promise<T
     if (res.status === 401 && !path.startsWith("/auth/")) onUnauthorized();
     throw new ApiError(detail, res.status, obj);
   }
+  if (init.method !== "GET" && /^\/(blocks|groups|code\/blocks)(\/|$)/.test(path))
+    window.dispatchEvent(new Event("pioneer-reference-changed"));
   return data as T;
 }
 
@@ -306,6 +315,7 @@ export interface ProjectMeta {
   name: string;
   description: string;
   autostart: boolean;
+  save_state: boolean;
   rev: number;
   created: number;
   updated: number;
@@ -389,7 +399,25 @@ export interface BlockFull extends BlockMeta {
   code: string;
 }
 
+export interface CodeFile { path: string; kind: "file" | "dir"; size?: number; sha256?: string }
+export const codeUrl = (path: string) => `${API}/code/${path}`;
+export async function codeRequest(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(codeUrl(path), { ...init, headers: { "X-Pioneer": "1", ...init.headers } });
+  if (!res.ok) {
+    if (res.status === 401) onUnauthorized();
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ?? `Ошибка ${res.status}`);
+  }
+  if (init.method && init.method !== "GET" && path.startsWith("blocks/")) window.dispatchEvent(new Event("pioneer-reference-changed"));
+  return res;
+}
 export const api = {
+  codeLibraries: () => call<{id: string; name: string}[]>("/code/lib"),
+  codeLibraryCreate: (id: string) => call<{id: string}>("/code/lib", {id, name: id}),
+  codeTree: (kind: string, id: string) => call<{meta: {entry?: string}; files: CodeFile[]}>(`/code/${kind}/${id}/tree`),
+  codeFile: (kind: string, id: string, path: string) => call<{text: string}>(`/code/${kind}/${id}/file?path=${encodeURIComponent(path)}`),
+  codeWrite: (kind: string, id: string, path: string, text: string) => call(`/code/${kind}/${id}/file`, {path, text}, "PUT"),
+  codeOp: (kind: string, id: string, op: string, path: string, target?: string) => call(`/code/${kind}/${id}/${op}`, {path, target}),
   me: () => call<{ authenticated: boolean; password_set: boolean }>("/auth/me"),
   login: (password: string) => call("/auth/login", { password }),
   logout: () => call("/auth/logout", {}),
@@ -403,16 +431,17 @@ export const api = {
   scripts: () => call<ScriptMeta[]>("/scripts"),
   script: (id: string) => call<ScriptFull>(`/scripts/${id}`),
   scriptCreate: (name: string, code?: string) => call<ScriptMeta>("/scripts", { name, code }),
-  scriptUpdate: (id: string, patch: { name?: string; code?: string; autostart?: boolean }) =>
+  scriptUpdate: (id: string, patch: { name?: string; code?: string; autostart?: boolean; entry?: string; restart_on_save?: boolean }) =>
     call<ScriptMeta>(`/scripts/${id}`, patch, "PUT"),
   scriptDelete: (id: string) => call(`/scripts/${id}`, undefined, "DELETE"),
-  scriptRun: (id: string, action: "start" | "stop" | "restart") => call<ScriptStatus>(`/scripts/${id}/${action}`, {}),
+  scriptRun: (id: string, action: "start" | "stop" | "restart", file?: string) => call<ScriptStatus>(`/scripts/${id}/${action}${file ? `?file=${encodeURIComponent(file)}` : ""}`, {}),
   help: () => call<HelpReference>("/help"),
   nodeTypes: () => call<{ types: NodeTypeSchema[]; socket_colors: Record<SocketType, string> }>("/node-types"),
   projects: () => call<ProjectMeta[]>("/projects"),
   project: (id: string) => call<ProjectFull>(`/projects/${id}`),
-  projectCreate: (name: string, description = "") => call<ProjectMeta>("/projects", { name, description }),
-  projectUpdate: (id: string, patch: { name?: string; description?: string; autostart?: boolean }) =>
+  projectCreate: (name: string, description = "", graph?: Graph) => call<ProjectMeta>("/projects", { name, description, graph }),
+  projectTemplates: () => call<{templates: {id: string; name: string; description: string; graph: Graph}[]}>("/project-templates"),
+  projectUpdate: (id: string, patch: { name?: string; description?: string; autostart?: boolean; save_state?: boolean }) =>
     call<ProjectMeta>(`/projects/${id}`, patch, "PUT"),
   projectDelete: (id: string) => call(`/projects/${id}`, undefined, "DELETE"),
   projectDuplicate: (id: string) => call<ProjectMeta>(`/projects/${id}/duplicate`, {}),

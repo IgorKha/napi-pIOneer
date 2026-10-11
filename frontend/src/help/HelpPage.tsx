@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { HelpReference, NodeTypeSchema, SdkMember, SdkSymbol, SocketSchema } from "../api";
 import { href, navigate } from "../route";
 import { CodeBlock, Inline, Markdown, parseMarkdown } from "./Markdown";
-import { slug, useHelp } from "./useHelp";
+import { slug, useHelpResource } from "./useHelp";
 
 interface Props {
   section?: string;
@@ -19,7 +19,7 @@ interface Entry {
 
 /** Страница «Справка» (docs/ideas/004): руководства, справочник SDK, ноды, ошибки. */
 export function HelpPage({ section = "start", anchor }: Props) {
-  const ref = useHelp();
+  const { reference: ref, error, reload } = useHelpResource();
   const [query, setQuery] = useState("");
   const search = useRef<HTMLInputElement>(null);
   const main = useRef<HTMLDivElement>(null);
@@ -49,14 +49,18 @@ export function HelpPage({ section = "start", anchor }: Props) {
     const q = query.trim().toLowerCase();
     if (!q) return [];
     return entries
-      .map((e) => ({ e, score: e.title.toLowerCase().includes(q) ? 2 : e.text.toLowerCase().includes(q) ? 1 : 0 }))
+      .map((e) => {
+        const words = normalize(q).split(/\s+/);
+        const title = normalize(e.title), text = normalize(`${e.title} ${e.hint} ${e.text}`);
+        return {e, score: words.every(w => title.includes(w)) ? 2 : words.every(w => text.includes(w)) ? 1 : 0};
+      })
       .filter((r) => r.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 40)
       .map((r) => r.e);
   }, [entries, query]);
 
-  if (!ref) return <div className="p-8 text-muted">Загрузка справки…</div>;
+  if (!ref) return <div className="p-8 text-muted">{error ? <><p role="alert">{error}</p><button onClick={reload} className="mt-3 text-accent">Повторить загрузку</button></> : "Загрузка справки…"}</div>;
   const guide = ref.guides.find((g) => g.id === section);
 
   return (
@@ -91,6 +95,7 @@ export function HelpPage({ section = "start", anchor }: Props) {
       </aside>
 
       <main ref={main} className="min-h-0 flex-1 overflow-auto px-10 py-8">
+        <div className="mb-4 flex items-center justify-end gap-3 text-xs text-muted">{error && <span role="alert" className="text-err">{error}</span>}<button onClick={reload} className="hover:text-fg">Обновить справочник</button></div>
         {section === "api" ? (
           <ApiReference symbols={ref.sdk} />
         ) : section === "nodes" ? (
@@ -105,11 +110,17 @@ export function HelpPage({ section = "start", anchor }: Props) {
   );
 }
 
+const normalize = (s: string) => s.toLowerCase().replace(/ё/g, "е");
+
 function indexOf(ref: HelpReference): Entry[] {
   const out: Entry[] = [];
   for (const g of ref.guides) {
+    let article: Entry | undefined;
     for (const b of parseMarkdown(g.markdown)) {
-      if (b.kind === "h" && b.level >= 2) out.push({ section: g.id, anchor: slug(b.text), title: b.text, hint: g.title, text: "" });
+      if (b.kind === "h" && b.level >= 2) {
+        article = { section: g.id, anchor: slug(b.text), title: b.text, hint: g.title, text: "" };
+        out.push(article);
+      } else if (article) article.text += JSON.stringify(b) + " ";
     }
     out.push({ section: g.id, title: g.title, hint: "раздел", text: g.markdown });
   }
@@ -134,22 +145,23 @@ function Toc({ ref_, section, anchor }: { ref_: HelpReference; section: string; 
       </a>
     );
   };
-  const guide = (id: string) => ref_.guides.find((g) => g.id === id);
   const categories = [...new Set(ref_.nodes.map((n) => n.category))];
   return (
     <>
-      {["start", "recipes"].map((id) => guide(id) && link(id, guide(id)!.title))}
-      {section === "recipes" && parseMarkdown(guide("recipes")?.markdown ?? "")
-        .filter((b) => b.kind === "h" && b.level === 2)
-        .map((b) => b.kind === "h" && link("recipes", b.text, slug(b.text), true))}
+      {ref_.guides.filter(g => !["hardware", "drivers", "errors"].includes(g.id)).map(g => <Fragment key={g.id}>
+        {link(g.id, g.title)}
+        {section === g.id && parseMarkdown(g.markdown).filter(b => b.kind === "h" && b.level === 2)
+          .map(b => b.kind === "h" && link(g.id, b.text, slug(b.text), true))}
+      </Fragment>)}
       {link("api", "Справочник SDK")}
-      {section === "api" && ref_.sdk.map((s) => link("api", s.name, s.name, true))}
+      {section === "api" && ref_.sdk.map(s => link("api", s.name, s.name, true))}
       {link("nodes", "Ноды графа")}
-      {section === "nodes" && categories.map((c) => link("nodes", c, slug(c), true))}
-      {["hardware", "errors"].map((id) => guide(id) && link(id, guide(id)!.title))}
-      {section === "errors" && parseMarkdown(guide("errors")?.markdown ?? "")
-        .filter((b) => b.kind === "h" && b.level === 2)
-        .map((b) => b.kind === "h" && link("errors", b.text, slug(b.text), true))}
+      {section === "nodes" && categories.map(c => link("nodes", c, slug(c), true))}
+      {ref_.guides.filter(g => ["hardware", "drivers", "errors"].includes(g.id)).map(g => <Fragment key={g.id}>
+        {link(g.id, g.title)}
+        {section === g.id && parseMarkdown(g.markdown).filter(b => b.kind === "h" && b.level === 2)
+          .map(b => b.kind === "h" && link(g.id, b.text, slug(b.text), true))}
+      </Fragment>)}
     </>
   );
 }

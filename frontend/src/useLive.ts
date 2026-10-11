@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { BenchModel, LedState, LogLine, PinState, ProjectLive, ProjectLogLine, ProjectStatus, ScriptStatus } from "./api";
 
 const LOG_KEEP = 1000;
@@ -66,8 +66,8 @@ export function useLive(initialBench: BenchModel[] | null, onUnauthorized: () =>
     };
   }, [onUnauthorized]);
 
-  const resetProjectLive = (id: string, snapshot: ProjectLive) =>
-    setProjectLive((prev) => ({ ...prev, [id]: snapshot }));
+  const resetProjectLive = useCallback((id: string, snapshot: ProjectLive) =>
+    setProjectLive((prev) => ({ ...prev, [id]: snapshot })), []);
 
   return { pins, bench, leds, scriptLogs, scriptStatus, status, projectLive, projectLogs, projectStatus,
            resetProjectLive, socket };
