@@ -56,6 +56,8 @@ async def hook(path: str, request: Request) -> JSONResponse:
 
     import asyncio
     await asyncio.to_thread(done.wait, REPLY_TIMEOUT_S + 0.5)
+    if ctx.rejected:
+        return JSONResponse({"ok": False, "error": ctx.rejected}, 409)
     if ctx.replied:
         return JSONResponse(ctx.reply_body, ctx.reply_status)
     if ctx.done and not ctx.timed_out:

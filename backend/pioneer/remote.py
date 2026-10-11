@@ -71,7 +71,9 @@ class Remote:
         self.projects.engine.inject_call(pid, Origin("remote", transport), lambda: node.deliver(args, ctx),
                                          ctx=ctx, node=node)
         done.wait(timeout + 0.5)
-        if ctx.replied:
+        if ctx.rejected:
+            result = ({"id": rid, "ok": False, "error": ctx.rejected}, 409)
+        elif ctx.replied:
             result = ({"id": rid, "ok": ctx.reply_status < 400, "result": ctx.reply_body}, 200)
         elif ctx.done and not ctx.timed_out:
             result = ({"id": rid, "ok": True}, 200)

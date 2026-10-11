@@ -610,7 +610,13 @@ class Engine:
             rt = self.runtimes.get(project_id)
             if rt is None or not rt.running or (node is not None and rt.nodes.get(node.id) is not node):
                 if ctx is not None and not ctx.done:
-                    ctx.done = True  # проект остановлен — запрос не будет обработан
+                    ctx.rejected = "проект не запущен или источник запроса устарел"
+                    ctx.done = True
+                    for cb in ctx.on_complete:
+                        try:
+                            cb(ctx)
+                        except Exception:
+                            log.exception("request rejection callback")
                 return
             if ctx is not None and ctx.deadline is not None:
                 self._arm_deadline(ctx)

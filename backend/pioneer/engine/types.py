@@ -135,6 +135,7 @@ class RequestContext:
     replied: bool = False
     done: bool = False
     timed_out: bool = False
+    rejected: str | None = None
     pending: int = 0
 
 
