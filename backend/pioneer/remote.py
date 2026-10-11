@@ -23,6 +23,7 @@ class Remote:
         self.projects = projects
         self._recent: collections.OrderedDict = collections.OrderedDict()  # (команда, id) -> (ответ, код)
         self._lock = threading.Lock()
+        self._pending: dict[tuple[str, str], list] = {}
         self.state_listeners: list[Callable[[str, dict], None]] = []  # MQTT: публикация состояний
 
     def nodes(self, cls):
@@ -44,12 +45,39 @@ class Remote:
         return None
 
     def execute_command(self, name: str, body: dict, transport: str, who: str = "?") -> tuple[dict, int]:
-        """→ (ответ {"id", "ok", "result"|"error"}, HTTP-код)."""
         body = body if isinstance(body, dict) else {}
         rid = str(body.get("id", ""))[:64] or None
+        if rid is None:
+            return self._execute_command(name, body, transport, who)
+        key = (name, rid)
         with self._lock:
-            if rid and (name, rid) in self._recent:
-                return self._recent[(name, rid)]
+            if key in self._recent:
+                return self._recent[key]
+            slot = self._pending.get(key)
+            owner = slot is None
+            if owner:
+                if len(self._pending) >= _RECENT_MAX:
+                    return {"id": rid, "ok": False, "error": "слишком много команд в работе"}, 503
+                slot = self._pending[key] = [threading.Event(), None]
+        if not owner:
+            if not slot[0].wait(TIMEOUT_S + 1):
+                return {"id": rid, "ok": False, "error": "команда ещё в работе"}, 503
+            return slot[1]
+        result = ({"id": rid, "ok": False, "error": "команда не выполнена"}, 500)
+        try:
+            result = self._execute_command(name, body, transport, who)
+            return result
+        finally:
+            with self._lock:
+                self._recent[key] = result
+                while len(self._recent) > _RECENT_MAX:
+                    self._recent.popitem(last=False)
+                slot[1] = result
+                self._pending.pop(key, None)
+                slot[0].set()
+
+    def _execute_command(self, name: str, body: dict, transport: str, who: str) -> tuple[dict, int]:
+        rid = str(body.get("id", ""))[:64] or None
         found = next(((pid, rt, n) for pid, rt, n in self.nodes(Command) if n.name == name), None)
         if found is None:
             return {"id": rid, "ok": False, "error": f"нет команды «{name}»"}, 404
@@ -82,11 +110,6 @@ class Remote:
         ms = (time.monotonic() - t0) * 1000
         status = "ok" if result[0]["ok"] else result[0].get("error", "ошибка")
         rt.engine.loop.call_soon_threadsafe(rt.log, f"команда {name} ({transport}, {who}): {status}, {ms:.0f} мс")
-        if rid:
-            with self._lock:
-                self._recent[(name, rid)] = result
-                while len(self._recent) > _RECENT_MAX:
-                    self._recent.popitem(last=False)
         return result
 
     def state_changed(self, name: str, current: dict) -> None:

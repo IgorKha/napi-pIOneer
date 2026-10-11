@@ -206,3 +206,18 @@ def test_review_11_boot_commit_does_not_hold_hardware_locks(driver, monkeypatch)
         return original(*args,**kwargs)
     monkeypatch.setattr(driver.overlays.uenv,"commit",commit)
     assert driver.apply("J10-16",True,plan["hash"])["changed"]
+
+
+def test_review_12_duplicate_commands_share_one_execution(client, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pioneer.remote import Remote
+    pm=client.app.state.projects;p=pm.create("dedupe")
+    pm.apply_ops(p.id,[{"op":"add_node","id":"cmd","type":"builtin.command","params":{"name":"once"}}]);pm.start(p.id)
+    node=pm.engine.runtimes[p.id].nodes["cmd"];original=node.deliver;executions=[]
+    def deliver(*args):executions.append(1);time.sleep(.06);return original(*args)
+    monkeypatch.setattr(node,"deliver",deliver)
+    remote=Remote(pm);gate=threading.Barrier(2)
+    def send():gate.wait();return remote.execute_command("once",{"id":"same"},"mqtt")
+    with ThreadPoolExecutor(2) as pool:
+        a=pool.submit(send);b=pool.submit(send);assert a.result()==b.result()
+    assert len(executions)==1 and not remote._pending
