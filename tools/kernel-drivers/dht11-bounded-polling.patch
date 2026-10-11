@@ -1,0 +1,118 @@
+--- a/dht11.c
++++ b/dht11.c
+@@ -28,6 +28,10 @@
+ 
+ #define DRIVER_NAME	"dht11"
+ 
++static bool polling;
++module_param(polling, bool, 0444);
++MODULE_PARM_DESC(polling, "Bounded atomic polling for non-sleeping GPIO (maximum 8 ms per read)");
++
+ #define DHT11_DATA_VALID_TIME	2000000000  /* 2s in ns */
+ 
+ #define DHT11_EDGES_PREAMBLE 2
+@@ -183,6 +187,49 @@
+ 	}
+ 
+ 	return IRQ_HANDLED;
++}
++
++/* Some GPIO controllers cannot capture DHT22's short pulses reliably via IRQ.
++ * Keep this opt-in fallback bounded; never sleep/log with interrupts disabled. */
++static int dht11_poll(struct dht11 *dht11)
++{
++	unsigned long flags;
++	s64 deadline, now;
++	int ret, value, previous = 1;
++	bool saw_high = false;
++
++	preempt_disable();
++	local_irq_save(flags);
++	ret = gpiod_direction_input(dht11->gpiod);
++	if (ret)
++		goto out;
++	deadline = ktime_get_boottime_ns() + 8000000;
++	while (dht11->num_edges < DHT11_EDGES_PER_READ) {
++		now = ktime_get_boottime_ns();
++		if (now >= deadline)
++			break;
++		value = gpiod_get_value(dht11->gpiod);
++		if (value < 0) {
++			ret = value;
++			goto out;
++		}
++		/* Skip the host's release; sensor frame starts on a falling edge. */
++		if (!saw_high) {
++			saw_high = value == 1;
++			continue;
++		}
++		if (value != previous) {
++			dht11->edges[dht11->num_edges].ts = now;
++			dht11->edges[dht11->num_edges++].value = value;
++			previous = value;
++		}
++		cpu_relax();
++	}
++	ret = dht11->num_edges == DHT11_EDGES_PER_READ ? 1 : 0;
++out:
++	local_irq_restore(flags);
++	preempt_enable();
++	return ret;
+ }
+ 
+ static int dht11_read_raw(struct iio_dev *iio_dev,
+@@ -219,21 +266,25 @@
+ 			goto err;
+ 		usleep_range(DHT11_START_TRANSMISSION_MIN,
+ 			     DHT11_START_TRANSMISSION_MAX);
+-		ret = gpiod_direction_input(dht11->gpiod);
+-		if (ret)
+-			goto err;
++		if (polling) {
++			ret = dht11_poll(dht11);
++		} else {
++			ret = gpiod_direction_input(dht11->gpiod);
++			if (ret)
++				goto err;
++	
++			ret = request_irq(dht11->irq, dht11_handle_irq,
++					  IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
++					  iio_dev->name, iio_dev);
++			if (ret)
++				goto err;
++	
++			ret = wait_for_completion_killable_timeout(&dht11->completion,
++								   HZ);
++	
++			free_irq(dht11->irq, iio_dev);
++		}
+ 
+-		ret = request_irq(dht11->irq, dht11_handle_irq,
+-				  IRQF_TRIGGER_RISING | IRQF_TRIGGER_FALLING,
+-				  iio_dev->name, iio_dev);
+-		if (ret)
+-			goto err;
+-
+-		ret = wait_for_completion_killable_timeout(&dht11->completion,
+-							   HZ);
+-
+-		free_irq(dht11->irq, iio_dev);
+-
+ #ifdef CONFIG_DYNAMIC_DEBUG
+ 		dht11_edges_print(dht11);
+ #endif
+@@ -306,8 +357,13 @@
+ 	if (IS_ERR(dht11->gpiod))
+ 		return PTR_ERR(dht11->gpiod);
+ 
++	if (polling && gpiod_cansleep(dht11->gpiod)) {
++		dev_err(dev, "polling requires a non-sleeping GPIO controller\n");
++		return -EINVAL;
++	}
++
+ 	dht11->irq = gpiod_to_irq(dht11->gpiod);
+-	if (dht11->irq < 0) {
++	if (!polling && dht11->irq < 0) {
+ 		dev_err(dev, "GPIO %d has no interrupt\n", desc_to_gpio(dht11->gpiod));
+ 		return -EINVAL;
+ 	}
