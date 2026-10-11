@@ -67,13 +67,13 @@ class Pulls:
             if plan['blockers']:raise DriverError('; '.join(plan['blockers']),409)
             with d.hw._lock,d.hw.res._lock:
                 if any(p in d.hw.res.claims for p in set(self.config())|set(plan['values'])):raise DriverError('пин занят',409)
-                if self._plan_hash(plan)!=expected:raise DriverError('uEnv изменился',409)
-                dest=d.cfg.user_overlays_dir/(NAME+'.dtbo')
-                files={self.file:json.dumps(plan['values']).encode()}
-                if plan['values']:files[dest]=blob
-                try:
-                    return d.overlays.uenv.commit(plan['uenv_hash'],text,files)
-                except UEnvError as e:
-                    raise DriverError(str(e),409) from e
+            if self._plan_hash(plan)!=expected:raise DriverError('uEnv изменился',409)
+            dest=d.cfg.user_overlays_dir/(NAME+'.dtbo')
+            files={self.file:json.dumps(plan['values']).encode()}
+            if plan['values']:files[dest]=blob
+            try:
+                return d.overlays.uenv.commit(plan['uenv_hash'],text,files)
+            except UEnvError as e:
+                raise DriverError(str(e),409) from e
     def _plan_hash(self,plan):
         return hashlib.sha256((self.drivers.boot_text()+json.dumps(self.config(),sort_keys=True)+plan['source']).encode()).hexdigest()

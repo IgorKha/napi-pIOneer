@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 import pytest
 from test_api import client, anon
+from test_kernel_drivers import driver, elf
 
 
 def test_review_1_boot_lock_order(client, monkeypatch):
@@ -194,3 +195,14 @@ def test_review_10_writes_and_batch_import_do_not_hash_tree(tmp_path, monkeypatc
     monkeypatch.setattr(CodeTree,"files",files)
     t.import_zip(buf.getvalue())
     assert len(scans)==2 and t.read("folder/f49.py")==b"value=1"
+
+
+def test_review_11_boot_commit_does_not_hold_hardware_locks(driver, monkeypatch):
+    driver.install(elf());plan=driver.preview("J10-16",True)
+    original=driver.overlays.uenv.commit
+    def commit(*args,**kwargs):
+        assert not driver.hw._lock._is_owned()
+        assert not driver.hw.res._lock.locked()
+        return original(*args,**kwargs)
+    monkeypatch.setattr(driver.overlays.uenv,"commit",commit)
+    assert driver.apply("J10-16",True,plan["hash"])["changed"]

@@ -326,15 +326,15 @@ class KernelPackages:
             with self.hw._lock, self.hw.res._lock:
                 if enabled and any(p in self.hw.res.claims for p in plan["pins"]):
                     raise DriverError("GPIO занят", 409)
-                # Catch external uEnv changes after compilation.
-                old = self.drivers.boot_text()
-                m = self.meta(ident)
-                digest = hashlib.sha256(old.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()).hexdigest()
-                if digest != expected_hash:
-                    raise DriverError("uEnv изменился — обновите предпросмотр", 409)
-                dest = self.cfg.user_overlays_dir / (name + ".dtbo")
-                files = {dest: blob} if enabled else {}
-                try:
-                    return self.drivers.overlays.uenv.commit(hashlib.sha256(old.encode()).hexdigest(), text, files)
-                except UEnvError as e:
-                    raise DriverError(str(e), 409) from e
+            # Catch external uEnv changes after compilation.
+            old = self.drivers.boot_text()
+            m = self.meta(ident)
+            digest = hashlib.sha256(old.encode() + blob + json.dumps(m, sort_keys=True).encode() + str(enabled).encode()).hexdigest()
+            if digest != expected_hash:
+                raise DriverError("uEnv изменился — обновите предпросмотр", 409)
+            dest = self.cfg.user_overlays_dir / (name + ".dtbo")
+            files = {dest: blob} if enabled else {}
+            try:
+                return self.drivers.overlays.uenv.commit(hashlib.sha256(old.encode()).hexdigest(), text, files)
+            except UEnvError as e:
+                raise DriverError(str(e), 409) from e

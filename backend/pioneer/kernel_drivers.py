@@ -262,11 +262,11 @@ class KernelDrivers:
             with self.hw._lock, self.hw.res._lock:
                 if enabled and pin in self.hw.res.claims:
                     raise DriverError("пин занят — остановите владельца", 409)
-                source = self.source(pin) if enabled else ""
-                current = hashlib.sha256((self.boot_text() + source + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
-                if current != expected_hash:
-                    raise DriverError("uEnv изменился во время проверки — обновите предпросмотр", 409)
-                return self._commit(pin, enabled, text, blob, plan["uenv_hash"])
+            source = self.source(pin) if enabled else ""
+            current = hashlib.sha256((self.boot_text() + source + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
+            if current != expected_hash:
+                raise DriverError("uEnv изменился во время проверки — обновите предпросмотр", 409)
+            return self._commit(pin, enabled, text, blob, plan["uenv_hash"])
 
     def _commit(self, pin, enabled, text, blob, uenv_hash):
         dest = self.cfg.user_overlays_dir / (OVERLAY + ".dtbo")
