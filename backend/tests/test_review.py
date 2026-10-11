@@ -126,3 +126,17 @@ def test_review_6_lifecycle_waits_for_actual_completion(client, monkeypatch):
     monkeypatch.setattr(pm.engine,"call",call);monkeypatch.setattr(ProjectRuntime,"start",start)
     pm.start(p.id);assert pm.engine.runtimes[p.id].running
     pm.stop(p.id);assert p.id not in pm.engine.runtimes
+
+
+def test_review_7_watchdog_tolerates_transient_health_failure(tmp_path, monkeypatch):
+    import asyncio
+    from pioneer.watchdog import Watchdog
+    from pioneer.config import Config
+    w=Watchdog(Config(kernel_sys_dir=tmp_path));w.fd=123;w.timeout=.04
+    results=iter([False, True, False, False, False]);writes=[]
+    def health():
+        if not next(results):raise TimeoutError("temporary engine stall")
+    w.health=health
+    monkeypatch.setattr("pioneer.watchdog.os.write",lambda fd,data:writes.append(data))
+    asyncio.run(w._feed())
+    assert len(writes)==4 and "перезагрузка" in w.error and w.fd==123

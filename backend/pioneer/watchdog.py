@@ -9,6 +9,8 @@ from pathlib import Path
 GETSUPPORT = 0x80285700
 SETTIMEOUT = 0xc0045706
 MAGICCLOSE = 0x0100
+MAX_HEALTH_FAILURES = 3
+HEALTH_TIMEOUT_S = 5
 
 
 class Watchdog:
@@ -65,16 +67,34 @@ class Watchdog:
         return self.status()
 
     async def _feed(self):
+        failures = 0
+        check = None
         try:
             while True:
                 await asyncio.sleep(self.timeout / 4)
                 if self.health:
-                    await asyncio.wait_for(asyncio.to_thread(self.health), 5)
+                    try:
+                        if check is None:
+                            check = asyncio.create_task(asyncio.to_thread(self.health))
+                        await asyncio.wait_for(asyncio.shield(check), HEALTH_TIMEOUT_S)
+                        failures = 0
+                        self.error = ''
+                    except Exception:
+                        failures += 1
+                        if failures >= MAX_HEALTH_FAILURES:
+                            raise RuntimeError('движок не отвечает несколько проверок подряд')
+                        self.error = f'временная ошибка проверки здоровья ({failures}/{MAX_HEALTH_FAILURES})'
+                    finally:
+                        if check is not None and check.done():
+                            check = None
                 os.write(self.fd, b'.')
         except asyncio.CancelledError:raise
         except Exception:
             # Keep fd open, do not magic-close on a fault: watchdog must expire.
             self.error = 'не удалось обновить watchdog; возможна аппаратная перезагрузка'
+        finally:
+            if check is not None:
+                check.cancel()
 
     async def disarm(self):
         if self.task:
