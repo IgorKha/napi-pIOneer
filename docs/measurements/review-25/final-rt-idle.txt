@@ -1,0 +1,21 @@
+  set ACTIVE -> read ACTIVE
+  set INACTIVE -> read INACTIVE
+  set ACTIVE -> read ACTIVE
+  set INACTIVE -> read INACTIVE
+  edge reader: SCHED_FIFO=True
+  production SoftPwm: SCHED_FIFO=True
+ freq=50Hz: events=301 (ожидалось ~300) rising=150 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=149 mean=48.0us p50=31.8 p95=143.2 p99=163.9 max=176.2
+  duty: mean=0.492 min=0.485 max=0.499
+  production SoftPwm: SCHED_FIFO=True
+ freq=100Hz: events=600 (ожидалось ~600) rising=300 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=299 mean=124.1us p50=93.5 p95=227.9 p99=312.2 max=2898.9
+  duty: mean=0.502 min=0.216 max=0.522
+  production SoftPwm: SCHED_FIFO=True
+ freq=200Hz: events=1200 (ожидалось ~1200) rising=600 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=599 mean=81.6us p50=57.2 p95=226.1 p99=298.9 max=3711.7
+  duty: mean=0.488 min=0.020 max=0.546
+  production SoftPwm: SCHED_FIFO=True
+ freq=500Hz: events=2960 (ожидалось ~3000) rising=1478 seq_gaps=0 same-type-consecutive=3
+  |period error| (kernel ts): n=1477 mean=93.0us p50=55.5 p95=199.9 p99=502.6 max=21005.0
+  duty: mean=0.478 min=0.068 max=2.257

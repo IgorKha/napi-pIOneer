@@ -399,7 +399,8 @@ def test_review_14_failed_mode_switch_retains_owner_and_restores_input(hw, monke
     hw.release("owner")
 
 
-def test_review_16_low_frequency_pwm_closes_before_releasing():
+@pytest.mark.parametrize("frequency", [0.01, 500.0])
+def test_review_16_low_frequency_pwm_closes_before_releasing(frequency):
     from pioneer.hal.softpwm import SoftPwm
 
     class Line:
@@ -418,7 +419,7 @@ def test_review_16_low_frequency_pwm_closes_before_releasing():
             self.closed = True
 
     line = Line()
-    pwm = SoftPwm(line, freq=0.01, duty=0.5)
+    pwm = SoftPwm(line, freq=frequency, duty=0.5)
     assert line.high.wait(1)
     start = time.monotonic()
     pwm.close(True)

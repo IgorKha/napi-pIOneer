@@ -123,6 +123,9 @@ def cmd_pwm_nowire(spec: str = "2:4") -> None:
 
 
 def cmd_loopback(out_spec: str, in_spec: str, load: str = "0", *, production=False) -> None:
+    if production:
+        # Import before timing or spawning load processes: cold imports skew the first window.
+        from pioneer.hal.softpwm import SoftPwm
     out_path, out_line = parse(out_spec)
     in_path, in_line = parse(in_spec)
     out_req = gpiod.request_lines(out_path, consumer=CONSUMER, config={out_line: gpiod.LineSettings(
@@ -153,21 +156,34 @@ def cmd_loopback(out_spec: str, in_spec: str, load: str = "0", *, production=Fal
             p.start()
         print(f"  нагрузка: {load} процессов busy-loop")
 
+    if production:
+        # Match the core: the GPIO reader is RT too, otherwise its GIL can stall PWM.
+        # Promote only after starting ordinary-priority CPU load processes.
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(50))
+        print("  edge reader: SCHED_FIFO=True", flush=True)
+        time.sleep(0.25)
+
     # 2) Soft-PWM на OUT, edge-события на IN с ядерными таймстемпами
     for freq in (50, 100, 200, 500):
         stop = threading.Event()
         th = threading.Thread(target=production_pwm if production else soft_pwm, args=(out_req, out_line, freq, 0.5, stop))
         events = []
         th.start()
+        if production:
+            time.sleep(0.25)  # exclude thread startup from the steady-state window
+        capture_start = time.monotonic_ns()
         t_end = time.monotonic() + 3
         while time.monotonic() < t_end:
             if in_req.wait_edge_events(timedelta(milliseconds=100)):
                 events.extend(in_req.read_edge_events())
+        capture_end = time.monotonic_ns()
         stop.set()
         th.join()
         while in_req.wait_edge_events(timedelta(milliseconds=50)):
             events.extend(in_req.read_edge_events())
 
+        if production:
+            events = [e for e in events if capture_start <= e.timestamp_ns <= capture_end]
         rising = [e.timestamp_ns for e in events if e.event_type == e.Type.RISING_EDGE]
         falling = [e.timestamp_ns for e in events if e.event_type == e.Type.FALLING_EDGE]
         seqs = [e.line_seqno for e in events]

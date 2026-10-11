@@ -1,0 +1,22 @@
+  set ACTIVE -> read ACTIVE
+  set INACTIVE -> read INACTIVE
+  set ACTIVE -> read ACTIVE
+  set INACTIVE -> read INACTIVE
+  нагрузка: 4 процессов busy-loop
+  edge reader: SCHED_FIFO=True
+  production SoftPwm: SCHED_FIFO=True
+ freq=50Hz: events=301 (ожидалось ~300) rising=150 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=149 mean=184.1us p50=36.2 p95=134.1 p99=10523.4 max=10553.5
+  duty: mean=0.495 min=0.017 max=0.507
+  production SoftPwm: SCHED_FIFO=True
+ freq=100Hz: events=601 (ожидалось ~600) rising=301 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=300 mean=35.9us p50=22.4 p95=112.3 p99=159.5 max=171.2
+  duty: mean=0.497 min=0.482 max=0.509
+  production SoftPwm: SCHED_FIFO=True
+ freq=200Hz: events=1200 (ожидалось ~1200) rising=600 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=599 mean=22.3us p50=8.1 p95=95.1 p99=131.9 max=179.7
+  duty: mean=0.496 min=0.462 max=0.519
+  production SoftPwm: SCHED_FIFO=True
+ freq=500Hz: events=3000 (ожидалось ~3000) rising=1500 seq_gaps=0 same-type-consecutive=0
+  |period error| (kernel ts): n=1499 mean=25.0us p50=9.1 p95=66.4 p99=287.0 max=2012.1
+  duty: mean=0.482 min=0.027 max=1.444

@@ -1,7 +1,7 @@
 """Soft-PWM поверх любого OutputLine: отдельный поток, SCHED_FIFO если возможно.
 
-Замеры на плате (spec 11.1): без RT под нагрузкой джиттер до 20 мс, с RT — p95 < 0.1 мс
-до 500 Гц. Выше MAX_FREQ не пускаем.
+Замеры текущей реализации и ограничения джиттера: spec 11.1.
+SCHED_FIFO снижает задержки; гарантии жёсткого realtime нет. Выше MAX_FREQ не пускаем.
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class SoftPwm(PwmLine):
                 t += period
             else:
                 self.line.write(True)
-                if self._stop.wait(max(0.0, t + period * duty - time.monotonic())):
+                if self._wait_until(t + period * duty):
                     break
                 self.line.write(False)
                 t += period
@@ -64,4 +64,18 @@ class SoftPwm(PwmLine):
             if delay < -period:  # сильно отстали (стоп/SIGSTOP) — не догоняем пачкой
                 t = time.monotonic()
             else:
-                self._stop.wait(max(0.0, delay))
+                self._wait_until(t)
+
+    def _wait_until(self, deadline: float) -> bool:
+        # Event.wait is interruptible, but its locks add jitter at the final edge.
+        # Sleep only the final <=2 ms; close still joins before releasing GPIO.
+        while not self._stop.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            if remaining > 0.002:
+                if self._stop.wait(remaining - 0.002):
+                    return True
+            else:
+                time.sleep(remaining)
+        return True
