@@ -1,4 +1,4 @@
-import type { SocketType } from "../api";
+import type { NodeTypeSchema, Op, GraphEdge, SocketType } from "../api";
 
 /** Цвета сокетов в духе Blender (spec 3.3) — те же, что отдаёт /node-types. */
 export const SOCKET_COLOR: Record<SocketType, string> = {
@@ -31,3 +31,19 @@ export const BOARD_ID = "@board";
 /** Гнездо «пин» у ноды железа: по одному на параметр-пин (у TM1637 — CLK и DIO). */
 export const PIN_HANDLE = "__pin:";
 export const pinHandle = (param: string) => PIN_HANDLE + param;
+
+/** Все пары сокетов, совместимые с обоими концами разрываемого провода. */
+export function insertionOptions(types: NodeTypeSchema[], source: SocketType, target: SocketType) {
+  return types.flatMap(schema => schema.inputs.filter(input => canConnect(source, input.type))
+    .flatMap(input => schema.outputs.filter(output => canConnect(output.type, target))
+      .map(output => ({ schema, input, output }))));
+}
+
+export function insertInEdge(edge: GraphEdge, id: string, type: string, input: string, output: string, position: [number, number]): Op[] {
+  return [
+    { op: "disconnect", to: edge.to },
+    { op: "add_node", id, type, position },
+    { op: "connect", from: edge.from, to: [id, input] },
+    { op: "connect", from: [id, output], to: edge.to },
+  ];
+}

@@ -14,7 +14,7 @@ import { BoardNodeView, type BoardFlowNode } from "./BoardNode";
 import { type FlowNode, GraphNodeView, type NodeActions } from "./GraphNode";
 import { Inspector } from "./Inspector";
 import { DND_TYPE, Palette } from "./Palette";
-import { BOARD_ID, canConnect, PIN_HANDLE, pinHandle, SOCKET_COLOR } from "./sockets";
+import { BOARD_ID, canConnect, PIN_HANDLE, pinHandle, SOCKET_COLOR, insertionOptions, insertInEdge } from "./sockets";
 import { AIPanel } from "../ai/AIPanel";
 import type { AIArtifact } from "../ai/api";
 import { graphPreview, changeColor, edgeKey } from "./preview";
@@ -22,6 +22,9 @@ import { graphPreview, changeColor, edgeKey } from "./preview";
 import { SerialQueue } from "../serialQueue";
 import { loadSnapshot } from "../liveSnapshot";
 
+import { ConnectionEdge, type ConnectionData } from "./ConnectionEdge";
+
+const edgeTypes = { connection: ConnectionEdge };
 const nodeTypes = { pnode: GraphNodeView, board: BoardNodeView };
 type AnyNode = FlowNode | BoardFlowNode;
 
@@ -75,6 +78,7 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
   const [groupTargets, setGroupTargets] = useState<[string, string][]>([]); // входы, подключённые снаружи группы
   const live = useMemo(() => (group ? liveInside(projectLiveData, group.inst) : projectLiveData), [group, projectLiveData]);
   const [nodes, setNodes] = useState<AnyNode[]>([]);
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<"inspector" | "ai">("inspector");
@@ -110,6 +114,7 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
   useEffect(() => {
     undo.current = [];
     redo.current = [];
+    setSelectedEdge(null);
     setHistory(null);
     api.project(id).then((p) => setHistory({ lines: p.log, liveFrom: liveLog?.length ?? 0 }), () => {});
     load();
@@ -169,6 +174,8 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "g") {
         e.preventDefault();
         keys.current.group();
+      } else if (e.key === "Escape") {
+        setSelectedEdge(null);
       } else if (e.key === "Tab") {
         e.preventDefault();
         keys.current.tab();
@@ -234,9 +241,19 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
     if (!project) return [];
     const g = diff?.graph ?? project.graph;
     const out: Edge[] = g.edges.map((e) => {
-      const type = schemaOf(g.nodes.find((n) => n.id === e.from[0]))?.outputs.find((o) => o.name === e.from[1])?.type ?? "Any";
+      const sourceType = schemaOf(g.nodes.find((n) => n.id === e.from[0]))?.outputs.find((o) => o.name === e.from[1])?.type;
+      const targetType = schemaOf(g.nodes.find((n) => n.id === e.to[0]))?.inputs.find((o) => o.name === e.to[1])?.type;
+      const type = sourceType ?? "Any";
+      const edgeId = `${e.from.join(".")}->${e.to.join(".")}`;
+      const finish = (ops: Op[]) => send(ops, "push", project.rev).then(r => { if (r) setSelectedEdge(null); return r; });
+      const data: ConnectionData = {
+        pin: false,
+        options: !preview && selectedEdge === edgeId && sourceType && targetType ? insertionOptions(types, sourceType, targetType) : [],
+        remove: () => finish([{ op: "disconnect", to: e.to }]),
+        insert: (option, position) => finish(insertInEdge(e, `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, option.schema.type, option.input.name, option.output.name, position)),
+      };
       return {
-        id: `${e.from.join(".")}->${e.to.join(".")}`, source: e.from[0], sourceHandle: e.from[1],
+        id: edgeId, type: "connection", selected: !preview && selectedEdge === edgeId, data, source: e.from[0], sourceHandle: e.from[1],
         target: e.to[0], targetHandle: e.to[1],
         style: { stroke: diff?.edges.has(edgeKey(e)) ? changeColor[diff.edges.get(edgeKey(e))!] : SOCKET_COLOR[type], strokeWidth: 2, opacity: diff?.edges.get(edgeKey(e)) === "removed" ? 0.45 : 1, strokeDasharray: diff?.edges.has(edgeKey(e)) || type === "Event" ? "5 4" : undefined },
       };
@@ -246,13 +263,15 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
       if (!pin) continue;
       const high = pinLive[pin]?.value === true;
       out.push({
-        id: `pin:${n.id}:${p}`, source: BOARD_ID, sourceHandle: `pin:${pin}`, target: n.id, targetHandle: pinHandle(p),
+        id: `pin:${n.id}:${p}`, type: "connection", selected: !preview && selectedEdge === `pin:${n.id}:${p}`,
+        data: { pin: true, options: [], remove: () => send([{ op: "set_param", node: n.id, name: p, value: null }], "push", project.rev).then(r => { if (r) setSelectedEdge(null); return r; }) } as ConnectionData,
+        source: BOARD_ID, sourceHandle: `pin:${pin}`, target: n.id, targetHandle: pinHandle(p),
         style: { stroke: high ? "var(--color-pin-high)" : "#8a8a8a", strokeWidth: 1.5, strokeDasharray: "2 3" },
         animated: high,
       });
     }
     return out;
-  }, [project, preview, diff, schemaOf, pinLive, pinParams]);
+  }, [project, preview, diff, schemaOf, pinLive, pinParams, selectedEdge, types, send]);
 
   // ---- события канваса
   const onNodesChange = useCallback((changes: NodeChange<AnyNode>[]) => {
@@ -465,13 +484,15 @@ function Editor({ socket, id, group, board, types, pinLive, live: projectLiveDat
                e.preventDefault();
                addNode(t, flow.screenToFlowPosition({ x: e.clientX, y: e.clientY }));
              }}>
-          <ReactFlow<AnyNode, Edge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} colorMode="dark"
+          <ReactFlow<AnyNode, Edge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} colorMode="dark"
                      nodesDraggable={!preview} nodesConnectable={!preview} elementsSelectable={!preview}
                      onNodesChange={onNodesChange} onConnect={onConnect} onDelete={onDelete}
                      onNodeDragStop={onNodeDragStop} isValidConnection={isValidConnection}
                      onNodeDoubleClick={(_, n) => n.type === "pnode" && groupIdOf((n.data as { gnode: { type: string } }).gnode.type) && openGroup(n.id)}
                      selectionKeyCode="Shift" multiSelectionKeyCode={["Meta", "Control"]}
-                     onPaneClick={() => setSelected(null)}
+                     onEdgeClick={(_, edge) => { if (!preview) { setSelectedEdge(edge.id); setSelected(null); setNodes(ns => ns.map(n => ({ ...n, selected: false }))); } }}
+                     onNodeClick={() => setSelectedEdge(null)}
+                     onPaneClick={() => { setSelected(null); setSelectedEdge(null); }}
                      deleteKeyCode={preview ? null : ["Delete", "Backspace"]} onInit={(f) => setTimeout(() => f.fitView({ padding: 0.15, maxZoom: 1 }), 50)}
                      minZoom={0.2} maxZoom={2} proOptions={{ hideAttribution: true }}
                      defaultEdgeOptions={{ interactionWidth: 14 }}>

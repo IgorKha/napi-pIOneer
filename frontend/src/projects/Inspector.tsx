@@ -237,6 +237,7 @@ function ProjectPanel({ project, onSelect, onMeta, running }: Props) {
       </section>
       <p className="text-[10.5px] leading-relaxed text-muted">
         Ноды — из палитры слева (перетащить или кликнуть). Провода — от выхода к входу; пин — протянуть от платы к ноде.
+        Нажмите на провод: + — вставить совместимую ноду, корзинка — удалить соединение.
         Delete — удалить, ⌘Z / ⌘⇧Z — отмена и повтор.
       </p>
     </div>

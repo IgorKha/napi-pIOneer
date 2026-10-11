@@ -63,3 +63,26 @@ assert.deepEqual(writes,['old','newest']);
 assert.equal(drafts['main.py'].saved,'newest');
 await assert.rejects(saveDrafts(()=>({'main.py':{text:'bad',saved:'',binary:false}}),async()=>{throw new Error('disk full');},()=>{},async()=>{}));
 console.log('review #21 save-before-run: passed');
+
+// Wire insertion respects both endpoints and keeps ambiguous socket pairs explicit.
+const {insertionOptions,insertInEdge}=await import('../src/projects/sockets.ts');
+const socket=(name,type)=>({name,type,title:name,doc:''});
+const schema=(type,inputs,outputs)=>({type,title:type,inputs,outputs});
+const choices=insertionOptions([
+  schema('math',[socket('a','Number'),socket('b','Number')],[socket('value','Number')]),
+  schema('text',[socket('value','String')],[socket('value','String')]),
+  schema('event',[socket('trigger','Event')],[socket('done','Event')]),
+  schema('source',[],[socket('value','Number')]),
+  schema('sink',[socket('value','Number')],[]),
+], 'Number','Number');
+assert.deepEqual(choices.map(o=>[o.schema.type,o.input.name,o.output.name]),[['math','a','value'],['math','b','value']]);
+assert.equal(insertionOptions([schema('event',[socket('trigger','Event')],[socket('done','Event')])],'Event','Event').length,1);
+assert.equal(insertionOptions([schema('any',[socket('in','Any')],[socket('out','Any')])],'Number','Number').length,0);
+assert.deepEqual(insertInEdge(e,'inserted','math','a','value',[100,200]),[
+  {op:'disconnect',to:['keep','value']},
+  {op:'add_node',id:'inserted',type:'math',position:[100,200]},
+  {op:'connect',from:['old','value'],to:['inserted','a']},
+  {op:'connect',from:['inserted','value'],to:['keep','value']},
+]);
+assert.deepEqual(e,{from:['old','value'],to:['keep','value']});
+console.log('Wire insertion socket compatibility and atomic operations: passed');
