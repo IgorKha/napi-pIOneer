@@ -18,14 +18,20 @@ def settings(freq, duty):
 
 
 class HardwarePwm(PwmLine):
+    # Only channels held by this core may be adopted; foreign exports stay protected.
+    _held_high: set[Path] = set()
+
     def __init__(self, chip: Path):
         self.chip, self.path = chip, chip / "pwm0"
         self.lock = threading.RLock()
         self.freq, self.duty = 100.0, 0.0
         self.closed = False
-        if self.path.exists():
+        held = self.path in self._held_high
+        if self.path.exists() and not held:
             raise LineBusy(errno.EBUSY, "канал PWM уже экспортирован другим владельцем")
-        (chip / "export").write_text("0")
+        if not held:
+            (chip / "export").write_text("0")
+        self._held_high.discard(self.path)
         try:
             deadline = time.monotonic() + 0.5
             while not self.path.exists():
@@ -66,8 +72,13 @@ class HardwarePwm(PwmLine):
         with self.lock:
             if self.closed:
                 return
+            if safe_value:
+                self.set(duty=1.0)
+                self._held_high.add(self.path)
+                self.closed = True
+                return
             try:
-                self.set(duty=1.0 if safe_value else 0.0)
+                self.set(duty=0.0)
                 self._write("enable", 0)
             finally:
                 (self.chip / "unexport").write_text("0")

@@ -462,3 +462,33 @@ def test_review_17_blocked_worker_does_not_block_edge_dispatch():
         runner.sock.close()
         peer.close()
     assert not thread.is_alive()
+
+
+def test_review_18_pwm_safe_high_stays_enabled_and_can_be_reused(tmp_path):
+    from pioneer.hal.hardware_pwm import HardwarePwm
+    from pioneer.hal.base import LineBusy
+
+    path = tmp_path / "pwm0"
+    path.mkdir()
+    for key, value in {
+        "period": "10000000",
+        "duty_cycle": "0",
+        "enable": "1",
+        "polarity": "normal",
+    }.items():
+        (path / key).write_text(value)
+    (tmp_path / "unexport").write_text("untouched")
+    pwm = HardwarePwm.__new__(HardwarePwm)
+    pwm.path, pwm.chip = path, tmp_path
+    pwm.freq, pwm.duty, pwm.closed, pwm.lock = 100.0, 0.0, False, threading.RLock()
+    pwm.close(True)
+    assert (path / "enable").read_text() == "1"
+    assert (path / "duty_cycle").read_text() == (path / "period").read_text()
+    assert (tmp_path / "unexport").read_text() == "untouched"
+    pwm.close(False)  # closing twice must not undo the safe level
+    replacement = HardwarePwm(tmp_path)
+    replacement.close(False)
+    assert (tmp_path / "unexport").read_text() == "0"
+    # Fake sysfs retains its directory: it is no longer a core-owned hold.
+    with pytest.raises(LineBusy):
+        HardwarePwm(tmp_path)
