@@ -1,0 +1,11 @@
+2026-10-11, Napi-C, I2C1 (/dev/i2c-1), PCF8574 address 0x27.
+User photo shows a 20x4 display, originally described as 1604.
+Previous 16x4 test placed rows 3/4 four columns before their physical starts.
+Command: python3 smoke.py --columns 20 --rows 4
+
+row 1, DDRAM 0x00: '1 Napi-C Pioneer    ' — verified
+row 2, DDRAM 0x40: '2 LCD2004 20x4      ' — verified
+row 3, DDRAM 0x14: '3 I2C1 0x27         ' — verified
+row 4, DDRAM 0x54: '4 Line four         ' — verified
+PASS: I2C1 0x27, 20x4, exact DDRAM readback
+Physical row placement and contrast still require visual confirmation.

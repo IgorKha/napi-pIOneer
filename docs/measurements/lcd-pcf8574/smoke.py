@@ -1,6 +1,6 @@
 """Manual LCD wiring test, independent of Pioneer and Adafruit integration.
 
-Run on Napi-C: python3 smoke.py --rows 4
+Run on Napi-C: python3 smoke.py --columns 20 --rows 4
 Only run with no application using this I2C address. Standard backpack mapping:
 P0=RS, P1=RW, P2=EN, P3=backlight, P4..P7=D4..D7.
 """
@@ -14,16 +14,17 @@ from smbus2 import SMBus, i2c_msg
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rows", type=int, choices=(2, 4), default=2)
+    parser.add_argument("--columns", type=int, choices=(16, 20), default=16)
     parser.add_argument("--address", type=lambda value: int(value, 0), default=0x27)
     args = parser.parse_args()
     if args.address not in (*range(0x20, 0x28), *range(0x38, 0x40)):
         parser.error("address must be in the PCF8574/PCF8574A range")
     rows = (
-        ["Napi-C Pioneer", "LCD1602 I2C 0x27"]
+        ["Napi-C Pioneer", f"LCD{args.columns}02 I2C {args.address:#04x}"]
         if args.rows == 2
-        else ["1 Napi-C Pioneer", "2 LCD1604 16x4", "3 I2C1 0x27", "4 Line four"]
+        else ["1 Napi-C Pioneer", f"2 LCD{args.columns}04 {args.columns}x4", f"3 I2C1 {args.address:#04x}", "4 Line four"]
     )
-    offsets = (0x00, 0x40, 0x10, 0x50)
+    offsets = (0x00, 0x40, args.columns, 0x40 + args.columns)
     with SMBus(1) as bus:
         def port(value):
             bus.i2c_rdwr(i2c_msg.write(args.address, [value]))
@@ -68,20 +69,20 @@ def main():
                 write(command)
             for offset, text in zip(offsets, rows):
                 write(0x80 | offset)
-                for character in text.ljust(16):
+                for character in text.ljust(args.columns):
                     write(ord(character), 1)
             for row, (offset, text) in enumerate(zip(offsets, rows), start=1):
                 write(0x80 | offset)
                 status = read()
                 if status != offset:
                     raise RuntimeError(f"row {row}: cursor {status:#x}, expected {offset:#x}")
-                data = bytes(read(1) for _ in range(16))
-                expected = text.ljust(16).encode("ascii")
+                data = bytes(read(1) for _ in range(args.columns))
+                expected = text.ljust(args.columns).encode("ascii")
                 if data != expected:
                     raise RuntimeError(f"row {row}: {data!r}, expected {expected!r}")
                 print(f"row {row}, DDRAM {offset:#04x}: {data.decode('ascii')!r} — verified")
             write(0x80)
-            print(f"PASS: I2C1 {args.address:#04x}, 16x{args.rows}, exact DDRAM readback")
+            print(f"PASS: I2C1 {args.address:#04x}, {args.columns}x{args.rows}, exact DDRAM readback")
             print("Physical row placement and contrast still require visual confirmation.")
         finally:
             port(8)  # RW/EN low, backlight on, including after a failed check.
