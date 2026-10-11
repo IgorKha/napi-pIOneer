@@ -165,6 +165,10 @@ class HAL(ABC):
     @abstractmethod
     def open_uart(self, device: str, *, baud: int = 9600) -> UARTPort: ...
 
+    def prepare_uart(self, device: str, *, baud: int = 9600):
+        """Run slow ownership checks before HW locks; return a quick opener."""
+        return lambda: self.open_uart(device, baud=baud)
+
     @abstractmethod
     def open_led(self, sysfs: str, *, default_trigger: str) -> LedLine: ...
 

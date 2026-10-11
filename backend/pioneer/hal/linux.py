@@ -305,11 +305,14 @@ class LinuxHAL(HAL):
         return _SPI(bus, cs, mode, speed_hz)
 
     def open_uart(self, device: str, *, baud: int = 9600) -> UARTPort:
+        return self.prepare_uart(device, baud=baud)()
+
+    def prepare_uart(self, device: str, *, baud: int = 9600):
         if holders := _scan_holders().get(os.path.realpath(device), []):  # свежие данные
             units = [h.split("(")[1].rstrip(")") for h in holders if ".service" in h]
             hint = f" — остановите: systemctl stop {' '.join(units)}" if units else ""
             raise LineBusy(errno.EBUSY, f"{device} уже открыт: {', '.join(holders)}{hint}")
-        return _UART(device, baud)
+        return lambda: _UART(device, baud)
 
     def device_holders(self, device: str) -> list[str]:
         now = time.monotonic()

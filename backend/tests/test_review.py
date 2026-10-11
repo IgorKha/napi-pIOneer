@@ -492,3 +492,48 @@ def test_review_18_pwm_safe_high_stays_enabled_and_can_be_reused(tmp_path):
     # Fake sysfs retains its directory: it is no longer a core-owned hold.
     with pytest.raises(LineBusy):
         HardwarePwm(tmp_path)
+
+
+def test_review_22_uart_scan_does_not_hold_hw_lock(hw, monkeypatch):
+    from pioneer.hal.linux import LinuxHAL
+    from pioneer.hal import linux
+
+    entered, release, other_done = threading.Event(), threading.Event(), threading.Event()
+
+    def scan():
+        entered.set()
+        assert release.wait(2)
+        return {}
+
+    monkeypatch.setattr(linux, "_scan_holders", scan)
+    # Exercise Linux's actual preparation with the bench port as the opener.
+    monkeypatch.setattr(linux, "_UART", lambda device, baud: hw.hal.open_uart(device, baud=baud))
+    monkeypatch.setattr(
+        hw.hal, "prepare_uart", lambda device, baud: LinuxHAL.prepare_uart(None, device, baud=baud)
+    )
+    errors = []
+
+    def open_uart():
+        try:
+            hw.uart("a", "a", "uart2")
+        except Exception as e:
+            errors.append(e)
+
+    thread = threading.Thread(target=open_uart)
+    thread.start()
+    try:
+        assert entered.wait(1)
+
+        def gpio():
+            hw.acquire("b", "b", "J9-7", "gpio_out")
+            hw.release("b")
+            other_done.set()
+
+        other = threading.Thread(target=gpio)
+        other.start()
+        assert other_done.wait(0.5)
+        other.join()
+    finally:
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive() and not errors

@@ -148,13 +148,14 @@ class HW:
         bus = self.bus(iface, "uart")
         rid = uart_id(bus.controller) + (":" + direction if direction != "both" else "")
         mode = "uart_" + direction if direction != "both" else "uart"
+        opener = self.hal.prepare_uart(bus.device, baud=baud)
         with self._lock:
             was_owned = rid in self.res.claims and owner in self.res.claims[rid].owners
             self.res.claim(owner, owner_name, rid, mode)
             hub = self._uart_hubs.get(bus.controller)
             try:
                 if hub is None:
-                    hub = self._uart_hubs[bus.controller] = UARTHub(self.hal.open_uart(bus.device, baud=baud))
+                    hub = self._uart_hubs[bus.controller] = UARTHub(opener())
                 return hub.subscribe(owner, direction, baud)
             except Exception:
                 if not was_owned: self.res.release(owner, rid)
