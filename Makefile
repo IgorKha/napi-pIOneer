@@ -1,12 +1,19 @@
 BOARD ?= root@192.168.1.161
 SSH_KEY ?= ~/.ssh/mkzev_rsa
 APP_DIR := /mount/rfs/rw/.pioneer/app
-PY := uv run --python 3.12  # вызывается из backend/
+PY := uv run --no-sync --python 3.12  # вызывается из backend/ после make prepare
 
-.PHONY: dev core ui frontend-deps build test lint format deploy reference vendor-ai
+.PHONY: help prepare dev core ui build test lint format deploy reference vendor-ai
+
+help: ## Помощь
+	@awk 'BEGIN {FS = ":.*##"; printf "\nДоступные цели:\n"} /^[a-zA-Z0-9_.-]+:.*##/ {printf "  %-14s %s\n", $$1, $$2} END {printf "\n"}' $(MAKEFILE_LIST)
 
 dev:  ## core (mock-HAL на Mac) :8100 + Vite :5173 -> http://localhost:5173/pioneer/
 	$(MAKE) -j2 core ui
+
+prepare:  ## зависимости для разработки и деплоя после скачивания проекта
+	cd backend && uv sync --locked --python 3.12
+	cd frontend && npm ci --include=dev
 
 DEV_PASSWORD ?= pioneer
 
@@ -14,16 +21,13 @@ core:  ## при первом запуске задаёт пароль вход�
 	cd backend && echo "$(DEV_PASSWORD)" | $(PY) python -m pioneer set-password --if-missing --stdin
 	cd backend && $(PY) python -m pioneer
 
-frontend-deps:
-	cd frontend && npm ci --include=dev
-
-ui: frontend-deps
+ui:
 	cd frontend && npm run dev
 
-build: frontend-deps
+build:
 	cd frontend && npm run build
 
-test: frontend-deps
+test:
 	cd backend && $(PY) pytest -q
 	cd frontend && npm run typecheck
 	cd frontend && npm test
@@ -32,7 +36,6 @@ reference:  ## справочник SDK в JSON (для статического
 	cd backend && $(PY) python ../tools/gen_sdk_reference.py ../sdk-reference.json
 
 vendor-ai:  ## SDK + cp312/aarch64 wheels, separately from system Python
-	cd backend && uv sync --locked --python 3.12
 	cd backend && uv pip install --python .venv/bin/python --target pioneer/vendor_ai --no-deps --python-platform aarch64-manylinux_2_28 --python-version 3.12 --only-binary :all: -r ../deploy/ai-requirements.txt
 
 deploy: build vendor-ai  ## код на плату (tar по ssh — rsync на плате нет) + идемпотентный install.sh
@@ -52,10 +55,10 @@ FORMAT_PY := pioneer/ai/__init__.py pioneer/ai/attachments.py pioneer/ai/provide
 	pioneer/state_store.py pioneer/templates.py pioneer/uenv.py pioneer/watchdog.py \
 	tests/test_review.py
 
-lint: frontend-deps  ## проверка форматирования модулей из review #15
+lint:  ## проверка форматирования модулей из review #15
 	cd backend && $(PY) ruff format --check $(FORMAT_PY)
 	cd frontend && npm run lint
 
-format: frontend-deps
+format:
 	cd backend && $(PY) ruff format $(FORMAT_PY)
 	cd frontend && npm run format
