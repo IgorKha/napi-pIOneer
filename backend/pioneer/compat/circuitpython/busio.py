@@ -67,6 +67,25 @@ class I2C(Bus):
         if frequency != 100000:
             raise NotImplementedError("Частота I2C задаётся DT; поддерживается запрос 100000 Гц")
         super().__init__("i2c", interface("i2c", {"SCL": scl, "SDA": sda}))
+        self._direct = {}  # адрес -> DirectI2C | None (None — через core: стенд или выключено)
+
+    def _transfer(self, address, operation, data=b"", n=0):
+        """Адрес захватывается в core один раз; на железе транзакции идут напрямую."""
+        if address not in self._direct:
+            grant = self._call("i2c_claim", address=address)
+            if grant.get("direct"):
+                from pioneer import direct_io
+
+                self._direct[address] = direct_io.i2c(grant["bus"])
+            else:
+                self._direct[address] = None
+        bus = self._direct[address]
+        if bus is not None:
+            return bus.transfer(address, data, n)
+        result = self._call(
+            "i2c", operation=operation, address=address, **({"data": data.hex()} if data else {}), **({"n": n} if n else {})
+        )
+        return bytes.fromhex(result) if result else b""
 
     def scan(self):
         self._require_lock()
@@ -76,33 +95,20 @@ class I2C(Bus):
         self._require_lock()
         if not stop:
             raise NotImplementedError("Для repeated-start используйте writeto_then_readfrom")
-        self._call(
-            "i2c",
-            operation="write",
-            address=address,
-            data=bytes(memoryview(buffer)[start:end]).hex(),
-        )
+        self._transfer(address, "write", bytes(memoryview(buffer)[start:end]))
 
     def readfrom_into(self, address, buffer, *, start=0, end=None):
         self._require_lock()
         target = memoryview(buffer)[start:end]
-        target[:] = bytes.fromhex(
-            self._call("i2c", operation="read", address=address, n=len(target))
-        )
+        target[:] = self._transfer(address, "read", n=len(target))
 
     def writeto_then_readfrom(
         self, address, out_buffer, in_buffer, *, out_start=0, out_end=None, in_start=0, in_end=None
     ):
         self._require_lock()
         target = memoryview(in_buffer)[in_start:in_end]
-        target[:] = bytes.fromhex(
-            self._call(
-                "i2c",
-                operation="write_read",
-                address=address,
-                data=bytes(memoryview(out_buffer)[out_start:out_end]).hex(),
-                n=len(target),
-            )
+        target[:] = self._transfer(
+            address, "write_read", bytes(memoryview(out_buffer)[out_start:out_end]), len(target)
         )
 
 

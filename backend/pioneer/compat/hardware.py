@@ -148,6 +148,20 @@ class CircuitPythonHW:
         n = int(a.get("n", 0))
         if len(data) > 4096 or not 0 <= n <= 4096:
             raise ValueError("операция CircuitPython до 4096 байт")
+        if action == "i2c_claim" and kind == "i2c":
+            # Захват адреса без транзакции: дальше worker пишет в /dev/i2c-N сам
+            # (pioneer.direct_io), если это железо, а не стенд.
+            addr = int(a["address"])
+            if not 0x08 <= addr <= 0x77:
+                raise ValueError("I2C address: 0x08…0x77")
+            if addr not in item["devices"]:
+                item["devices"][addr] = hw.i2c(owner, self.name, item["interface"], addr)
+            from pioneer import limits
+
+            bus = hw.bus(item["interface"], "i2c").number
+            direct = (hw.hal.name == "linux" and limits.get().direct_i2c
+                      and Path(f"/dev/i2c-{bus}").exists())
+            return {"direct": direct, "bus": bus}
         if action == "i2c" and kind == "i2c":
             addr = int(a["address"])
             if not 0x08 <= addr <= 0x77:

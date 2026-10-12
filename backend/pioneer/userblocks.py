@@ -111,6 +111,7 @@ class BlockHostClient:
         self._pending: dict[int, list] = {}
         self._send_lock = threading.Lock()
         self.dead: str | None = None
+        self._activity_at = 0.0  # последний признак работы обработчика с железом (monotonic)
         self._ready = threading.Event()
         threading.Thread(target=self._reader, name="blockhost-rpc", daemon=True).start()
         threading.Thread(target=self._output, name="blockhost-out", daemon=True).start()
@@ -132,7 +133,10 @@ class BlockHostClient:
                 msg = json.loads(line)
                 if msg.get("ready") is True:
                     self._ready.set()
+                elif "alive" in msg:  # обработчик работает с железом напрямую (direct_io)
+                    self._activity_at = time.monotonic()
                 elif "hardware" in msg:
+                    self._activity_at = time.monotonic()
                     try:
                         if self.on_hardware is None:
                             raise RuntimeError("железо недоступно до запуска проекта (код верхнего уровня блока)")
@@ -162,10 +166,14 @@ class BlockHostClient:
 
     def call(self, req: dict, timeout: float | None = None) -> list:
         what = "обработчик блока"
+        lim = limits.get()
         if timeout is None:
             key, what = _LIMIT_FOR.get(req.get("op") if req.get("op") != "call" else req.get("method"),
                                        ("block_call_s", what))
-            timeout = getattr(limits.get(), key)
+            timeout = getattr(lim, key)
+        # Обработчик, который всё время работает с железом (вывод на LCD), не зависший:
+        # пока приходят признаки активности, срок продлевается, но не дальше потолка.
+        cap = max(timeout, lim.block_call_max_s) if req.get("op") == "call" else timeout
         if self.dead:
             raise NodeError(f"{self.dead} — «Применить» перезапустит проект")
         rid = next(self._ids)
@@ -178,10 +186,22 @@ class BlockHostClient:
         except OSError:
             self.dead = "процесс блоков недоступен"
             raise NodeError(self.dead) from None
-        if not slot[0].wait(timeout):
+        started = time.monotonic()
+        deadline = started + timeout
+        while not slot[0].wait(max(0.0, min(deadline - time.monotonic(), 0.25))):
+            now = time.monotonic()
+            if self._activity_at > started:
+                deadline = min(started + cap, max(deadline, self._activity_at + timeout))
+            if now < deadline:
+                continue
+            if req.get("op") != "call":
+                reason = f"{what}: нет ответа за {timeout:g} с"
+            elif now - started >= cap:
+                reason = f"{what}: не уложился в максимум {cap:g} с"
+            else:
+                reason = f"{what}: нет ответа {timeout:g} с без работы с железом (завис?)"
             self._pending.pop(rid, None)
-            self.dead = (f"{what}: нет ответа за {timeout:g} с, процесс блоков остановлен — "
-                         "лимит: Настройки → Система → Таймауты")
+            self.dead = f"{reason}, процесс блоков остановлен — лимит: Настройки → Система → Таймауты"
             self.close()
             raise NodeError(self.dead)
         resp = slot[1]

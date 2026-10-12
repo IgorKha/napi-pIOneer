@@ -20,10 +20,12 @@ class Limits:
     block_load_s: float = 20.0
     block_start_s: float = 5.0
     block_call_s: float = 1.0
+    block_call_max_s: float = 30.0
     block_stop_s: float = 2.0
     block_hardware_rpc_s: float = 2.0
     block_schema_s: float = 15.0
     block_preload: bool = True
+    direct_i2c: bool = True
     script_rpc_s: float = 15.0
 
 
@@ -34,8 +36,12 @@ SPEC: dict[str, tuple[float, float, str, str]] = {
     "block_load_s": (1, 300, "Загрузка блока",
                      "Импорт файла блока и его setup(): инициализация железа, например LCD по I2C."),
     "block_start_s": (0.5, 120, "start() блока", "Первый вызов после запуска проекта."),
-    "block_call_s": (0.1, 60, "Обработчик блока",
-                     "on_change / on_event и таймеры. Если не уложился — процесс блоков проекта перезапускается кнопкой «Применить»."),
+    "block_call_s": (0.1, 60, "Обработчик блока без работы с железом",
+                     "on_change / on_event: сколько обработчик может молчать. Пока он работает с железом, "
+                     "срок продлевается; зависший — процесс блоков останавливается, «Применить» перезапустит."),
+    "block_call_max_s": (1, 600, "Обработчик блока, максимум",
+                         "Потолок даже для обработчика, который всё время работает с железом "
+                         "(например, вывод текста на LCD)."),
     "block_stop_s": (0.2, 60, "stop() блока", "Остановка ноды: вернуть железо в безопасное состояние."),
     "block_hardware_rpc_s": (0.2, 30, "Вызов железа из блока",
                              "Одна операция с пином или шиной из процесса блоков."),
@@ -43,6 +49,7 @@ SPEC: dict[str, tuple[float, float, str, str]] = {
     "script_rpc_s": (1, 300, "Вызов железа из скрипта", "Одна операция SDK скрипта (кроме чтения UART с таймаутом)."),
 }
 NAMES = tuple(f.name for f in fields(Limits))
+BOOLS = ("block_preload", "direct_i2c")
 
 
 def validate(values: dict) -> dict:
@@ -51,9 +58,9 @@ def validate(values: dict) -> dict:
     for key, value in values.items():
         if key not in NAMES:
             raise ValueError(f"неизвестный параметр {key!r}")
-        if key == "block_preload":
+        if key in BOOLS:
             if not isinstance(value, bool):
-                raise ValueError("block_preload: true или false")
+                raise ValueError(f"{key}: true или false")
             out[key] = value
             continue
         if isinstance(value, bool) or not isinstance(value, (int, float)):

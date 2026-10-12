@@ -74,6 +74,11 @@ export function LimitsSection() {
                  onChange={e => save({ block_preload: e.target.checked })} className="accent-accent" />
           <span>Предзагружать файлы блоков при запуске процесса <span className="text-muted">— импорт драйверов не съедает время «Загрузки блока»</span></span>
         </label>
+        <label className="col-span-2 flex items-center gap-2">
+          <input type="checkbox" checked={limits.values.direct_i2c === true}
+                 onChange={e => save({ direct_i2c: e.target.checked })} className="accent-accent" />
+          <span>Прямой I2C из блоков и скриптов <span className="text-muted">— адрес захватывается в core, транзакции идут без обхода через core (в разы быстрее для LCD и дисплеев). На стенде всегда через core.</span></span>
+        </label>
       </div>
       <div className="mt-3 flex gap-4 text-xs">
         <button disabled={busy || !changed.length} onClick={submit} className="rounded bg-accent px-3 py-2 text-bg disabled:opacity-40">

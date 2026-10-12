@@ -26,7 +26,7 @@ from pathlib import Path
 
 from pioneer.importscope import ImportScope
 
-from pioneer import block
+from pioneer import block, direct_io
 
 # Задаётся core из pioneer.limits при старте процесса (block_hardware_rpc_s).
 HW_RPC_TIMEOUT_S = float(os.environ.get("PIONEER_HW_RPC_TIMEOUT", "2"))
@@ -81,7 +81,9 @@ class Host:
         self.timers: list = []
         self.seq = itertools.count()
         self.cv = threading.Condition()
+        self.busy = False  # обрабатывается запрос core (не таймер)
         threading.Thread(target=self._timer_loop, name="block-timers", daemon=True).start()
+        threading.Thread(target=self._heartbeat, name="block-heartbeat", daemon=True).start()
 
     def send(self, msg: dict) -> None:
         data = (json.dumps(msg, ensure_ascii=False, default=str) + "\n").encode()
@@ -163,7 +165,22 @@ class Host:
                 else:self.requests.put(msg)
         finally:self.requests.put(None)
 
+    def _heartbeat(self) -> None:
+        """Пока обработчик работает с железом (растёт direct_io.ops), core продлевает его таймаут.
+        Зависший обработчик (цикл без ввода-вывода) пульса не даёт и снимается по лимиту."""
+        last = direct_io.ops
+        while True:
+            time.sleep(0.25)
+            now = direct_io.ops
+            if self.busy and now != last:
+                try:
+                    self.send({"alive": now})
+                except OSError:
+                    return
+            last = now
+
     def hardware(self,node,op,args):
+        direct_io.bump()
         rid=next(self.hardware_ids);slot=[threading.Event(),None];self.hardware_pending[rid]=slot
         try:
             self.send({"hardware":rid,"node":node,"op":op,"args":args})
@@ -197,10 +214,13 @@ class Host:
         self.send({"ready": True})
         while (req:=self.requests.get()) is not None:
             with self.lock:
+                self.busy = True
                 try:
                     self.send({"id":req["id"],"ok":True,"actions":self.handle(req)})
                 except Exception as e:
                     self.send({"id":req["id"],"ok":False,"error":error_text(e)})
+                finally:
+                    self.busy = False
 
 
 def main() -> None:

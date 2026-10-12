@@ -13,6 +13,7 @@ from pioneer.nodes import registry
 from pioneer.projects import ProjectError, ProjectManager
 from pioneer.userblocks import BlockManager
 from test_api import anon, client  # noqa: F401
+from test_circuitpython import circuit  # noqa: F401
 from pioneer.api.app import API
 
 
@@ -153,7 +154,7 @@ def test_handler_timeout_still_stops_worker(tmp_path, hw, monkeypatch):
     path.write_text(SLOW_SETUP.replace("SETUP", "0").replace("HANDLER", "1"))
     try:
         host.call({"op": "load", "file": str(path), "block": "slow", "node": "s", "params": {}})
-        with pytest.raises(NodeError, match="обработчик блока: нет ответа за 0.2 с"):
+        with pytest.raises(NodeError, match="обработчик блока: нет ответа 0.2 с без работы с железом"):
             host.call({"op": "call", "method": "on_change", "node": "s", "inputs": {}, "changed": []})
         assert host.dead
     finally:
@@ -170,3 +171,97 @@ def test_limits_api(client):  # noqa: F811
     assert client.put(API + "/settings/limits", json={"block_load_s": 0}).status_code == 422
     r = client.put(API + "/settings/limits", json={"block_load_s": None})
     assert r.json()["values"]["block_load_s"] == Limits().block_load_s
+
+
+BUSY_HANDLER = '''import time
+from pioneer.block import node, Node, Out, Bool
+
+@node(id="busy", title="Занят железом")
+class Busy(Node):
+    done = Out(Bool)
+
+    def on_change(self, changed):
+        t = time.monotonic()
+        while time.monotonic() - t < DURATION:
+            self._host.hardware(self.id, "noop", {})  # как запись в LCD по I2C
+            time.sleep(0.01)
+        self.done.set(True)
+'''
+
+
+def _busy_host(tmp_path, duration):
+    path = tmp_path / "busy.py"
+    path.write_text(BUSY_HANDLER.replace("DURATION", str(duration)))
+    host = workers.BlockHostClient(lambda *a: None, lambda *a: None, lambda node, op, args: None)
+    host.call({"op": "load", "file": str(path), "block": "busy", "node": "b", "params": {}})
+    return host
+
+
+def test_handler_working_with_hardware_is_extended(tmp_path, monkeypatch):
+    """Вывод на LCD: обработчик дольше block_call_s, но всё время работает с железом."""
+    use(monkeypatch, block_call_s=0.3, block_call_max_s=10)
+    host = _busy_host(tmp_path, 1.2)
+    try:
+        actions = host.call({"op": "call", "method": "on_change", "node": "b", "inputs": {}, "changed": []})
+        assert ["set", "done", True] in actions and not host.dead
+    finally:
+        host.close()
+
+
+def test_handler_cap_applies_even_with_activity(tmp_path, monkeypatch):
+    use(monkeypatch, block_call_s=0.3, block_call_max_s=1)
+    host = _busy_host(tmp_path, 5)
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(NodeError, match="не уложился в максимум 1 с"):
+            host.call({"op": "call", "method": "on_change", "node": "b", "inputs": {}, "changed": []})
+        assert time.monotonic() - t0 < 2.5
+    finally:
+        host.close()
+
+
+def test_direct_i2c_claims_once_then_bypasses_core(circuit, hw, monkeypatch):
+    """На железе адрес захватывается в core один раз, транзакции идут в /dev/i2c-N напрямую."""
+    import board
+    import pioneer.compat.hardware as core_side
+    from pioneer import direct_io
+
+    use(monkeypatch, direct_i2c=True)
+    monkeypatch.setattr(hw.hal, "name", "linux")
+    monkeypatch.setattr(core_side, "Path", lambda p: type("P", (), {"exists": lambda self: True})())
+    transfers = []
+
+    class FakeBus:
+        def transfer(self, addr, data=b"", n=0):
+            transfers.append((addr, bytes(data), n))
+            return bytes(n)
+
+    monkeypatch.setattr(direct_io, "i2c", lambda bus: FakeBus())
+    calls = []
+    original = circuit.call
+    monkeypatch.setattr(circuit, "call", lambda action, **a: (calls.append(action), original(action, **a))[1])
+    i2c = board.I2C()
+    assert i2c.try_lock()
+    for value in range(50):
+        i2c.writeto(0x27, bytes([value]))
+    buf = bytearray(2)
+    i2c.writeto_then_readfrom(0x27, b"\x01", buf)
+    i2c.unlock()
+    assert calls.count("i2c_claim") == 1 and "i2c" not in calls
+    assert len(transfers) == 51 and transfers[-1] == (0x27, b"\x01", 2)
+    assert "i2c1@0x27" in hw.res.claims  # захват адреса остаётся в ResourceManager
+
+
+def test_direct_i2c_switch_off_uses_core(circuit, hw, monkeypatch, bench):
+    import board
+
+    use(monkeypatch, direct_i2c=False)
+    monkeypatch.setattr(hw.hal, "name", "linux")
+    bench.add("i2c_regs", bus=1, addr=0x76)
+    i2c = board.I2C()
+    assert i2c.try_lock()
+    i2c.writeto(0x76, bytes([4, 9]))
+    buf = bytearray(1)
+    i2c.writeto_then_readfrom(0x76, bytes([4]), buf)
+    i2c.unlock()
+    assert buf == b"\x09"
