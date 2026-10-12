@@ -3,7 +3,7 @@ SSH_KEY ?= ~/.ssh/mkzev_rsa
 APP_DIR := /mount/rfs/rw/.pioneer/app
 PY := uv run --python 3.12  # вызывается из backend/
 
-.PHONY: dev core ui build test lint format deploy reference vendor-ai
+.PHONY: dev core ui frontend-deps build test lint format deploy reference vendor-ai
 
 dev:  ## core (mock-HAL на Mac) :8100 + Vite :5173 -> http://localhost:5173/pioneer/
 	$(MAKE) -j2 core ui
@@ -14,13 +14,16 @@ core:  ## при первом запуске задаёт пароль вход�
 	cd backend && echo "$(DEV_PASSWORD)" | $(PY) python -m pioneer set-password --if-missing --stdin
 	cd backend && $(PY) python -m pioneer
 
-ui:
+frontend-deps:
+	cd frontend && npm ci --include=dev
+
+ui: frontend-deps
 	cd frontend && npm run dev
 
-build:
+build: frontend-deps
 	cd frontend && npm run build
 
-test:
+test: frontend-deps
 	cd backend && $(PY) pytest -q
 	cd frontend && npm run typecheck
 	cd frontend && npm test
@@ -29,6 +32,7 @@ reference:  ## справочник SDK в JSON (для статического
 	cd backend && $(PY) python ../tools/gen_sdk_reference.py ../sdk-reference.json
 
 vendor-ai:  ## SDK + cp312/aarch64 wheels, separately from system Python
+	cd backend && uv sync --locked --python 3.12
 	cd backend && uv pip install --python .venv/bin/python --target pioneer/vendor_ai --no-deps --python-platform aarch64-manylinux_2_28 --python-version 3.12 --only-binary :all: -r ../deploy/ai-requirements.txt
 
 deploy: build vendor-ai  ## код на плату (tar по ssh — rsync на плате нет) + идемпотентный install.sh
@@ -48,10 +52,10 @@ FORMAT_PY := pioneer/ai/__init__.py pioneer/ai/attachments.py pioneer/ai/provide
 	pioneer/state_store.py pioneer/templates.py pioneer/uenv.py pioneer/watchdog.py \
 	tests/test_review.py
 
-lint:  ## проверка форматирования модулей из review #15
+lint: frontend-deps  ## проверка форматирования модулей из review #15
 	cd backend && $(PY) ruff format --check $(FORMAT_PY)
 	cd frontend && npm run lint
 
-format:
+format: frontend-deps
 	cd backend && $(PY) ruff format $(FORMAT_PY)
 	cd frontend && npm run format
