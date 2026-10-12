@@ -28,6 +28,9 @@ from pioneer.importscope import ImportScope
 
 from pioneer import block
 
+# Задаётся core из pioneer.limits при старте процесса (block_hardware_rpc_s).
+HW_RPC_TIMEOUT_S = float(os.environ.get("PIONEER_HW_RPC_TIMEOUT", "2"))
+
 
 def load_file(path: str, scope: ImportScope | None = None) -> dict[str, type[block.Node]]:
     """Выполнить файл блока и вернуть объявленные в нём ноды {id: класс}."""
@@ -164,13 +167,33 @@ class Host:
         rid=next(self.hardware_ids);slot=[threading.Event(),None];self.hardware_pending[rid]=slot
         try:
             self.send({"hardware":rid,"node":node,"op":op,"args":args})
-            if not slot[0].wait(.8):raise TimeoutError("hardware RPC не ответил за 0.8 с")
+            if not slot[0].wait(HW_RPC_TIMEOUT_S):
+                raise TimeoutError(f"вызов железа: нет ответа за {HW_RPC_TIMEOUT_S:g} с — "
+                                   "лимит: Настройки → Система → Таймауты")
             msg=slot[1]
             if not msg.get("ok"):raise ValueError(msg.get("error","ошибка железа"))
             return msg.get("result")
         finally:self.hardware_pending.pop(rid,None)
 
+    def warm_up(self, files: list[str]) -> None:
+        """До сигнала «готов»: импорт прослойки CircuitPython и файлов блоков проекта.
+        Тогда первый load — только создание ноды и setup(), а не холодные импорты.
+        Ошибка импорта здесь не фатальна: тот же файл честно упадёт в load с текстом ошибки."""
+        try:
+            import pioneer.compat.circuitpython  # noqa: F401 — 0.5 с на A35, лениво грузилось в первом вызове
+        except Exception:  # noqa: BLE001
+            pass
+        for path in files:
+            try:
+                key = (path, os.path.getmtime(path))
+                if key not in self.files:
+                    scope = self.scopes.setdefault(str(Path(path).parent), ImportScope(Path(path).parent))
+                    self.files[key] = load_file(path, scope)
+            except Exception:  # noqa: BLE001 — SIGTERM (SystemExit) не глотаем
+                continue
+
     def serve(self) -> None:
+        self.warm_up(json.loads(os.environ.get("PIONEER_PRELOAD", "[]")))
         self.send({"ready": True})
         while (req:=self.requests.get()) is not None:
             with self.lock:

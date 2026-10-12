@@ -111,7 +111,7 @@ def test_hung_block_isolated_and_dirty_after_save(env):
     pm.ui(p.id, "n", 1)
     assert time.monotonic() - t0 < 2  # таймаут 1 с, а не 3
     rt = pm.engine.runtimes[p.id]
-    assert "не ответил" in rt.node_state("h")["error"] and rt.sample("ok", "out").value is True
+    assert "нет ответа" in rt.node_state("h")["error"] and rt.sample("ok", "out").value is True
     assert not pm.status(p.id)["dirty"]
     time.sleep(0.01)
     bm.save(b["id"], TEMPLATE)
@@ -222,7 +222,8 @@ def test_worker_startup_timeout_reaps_process(monkeypatch):
         return proc
 
     monkeypatch.setattr(workers.subprocess, "Popen", stuck)
-    monkeypatch.setattr(workers, "WORKER_START_TIMEOUT_S", 0.05)
+    from pioneer.limits import Limits
+    monkeypatch.setattr(workers.limits, "get", lambda: Limits(block_worker_start_s=0.05))
     with pytest.raises(NodeError, match="не готов"):
         workers.BlockHostClient(lambda *a: None, lambda *a: None)
     assert started[0].poll() is not None

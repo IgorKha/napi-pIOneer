@@ -27,16 +27,17 @@ import time
 from pathlib import Path
 from typing import Any, ClassVar
 
+from pioneer import limits
 from pioneer.codetree import CodeTree, migrate
 from pioneer.config import REPO_ROOT
 from pioneer.engine.node import In, Node, NodeError, NodeRegistry, Out, Param, node
 from pioneer.engine.types import Origin, jsonable
 
 log = logging.getLogger(__name__)
-CALL_TIMEOUT_S = 1.0
-WORKER_START_TIMEOUT_S = 15.0
-SCHEMA_TIMEOUT_S = 15.0  # импорт на A35 небыстрый
 PREFIX = "user."
+# Какой лимит действует для запроса к процессу блоков (pioneer.limits); имя — для текста ошибки.
+_LIMIT_FOR = {"load": ("block_load_s", "загрузка блока"), "start": ("block_start_s", "start() блока"),
+              "stop": ("block_stop_s", "stop() блока")}
 
 TEMPLATE = '''from pioneer.block import node, Node, In, Out, Param, Number, Bool
 
@@ -70,11 +71,13 @@ def _env() -> dict:
 
 def extract_schema(path: Path) -> dict:
     """{"ok": true, "nodes": [...]} или {"ok": false, "error": "..."} — в отдельном процессе."""
+    timeout = limits.get().block_schema_s
     try:
         r = subprocess.run([sys.executable, "-m", "pioneer.blockhost", "--schema", str(path)], env=_env(),
-                           capture_output=True, text=True, timeout=SCHEMA_TIMEOUT_S, cwd=path.parent)
+                           capture_output=True, text=True, timeout=timeout, cwd=path.parent)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"импорт блока дольше {SCHEMA_TIMEOUT_S:g} с (бесконечный цикл на верхнем уровне?)"}
+        return {"ok": False, "error": f"импорт блока дольше {timeout:g} с (бесконечный цикл на верхнем уровне?) — "
+                                      "лимит: Настройки → Система → Таймауты"}
     try:
         return json.loads(r.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -83,14 +86,23 @@ def extract_schema(path: Path) -> dict:
 
 # ---------------------------------------------------------------- worker блоков проекта
 class BlockHostClient:
-    """Процесс pioneer.blockhost одного проекта."""
+    """Процесс pioneer.blockhost одного проекта.
 
-    def __init__(self, on_async, on_log, on_hardware=None):
+    Можно создать заранее, до движка (ProjectManager.start): процесс стартует и импортирует
+    файлы блоков проекта (preload) в потоке запроса, а не в потоке движка; колбэки
+    рантайма привязываются потом через bind().
+    """
+
+    def __init__(self, on_async=None, on_log=None, on_hardware=None, *, preload: list[str] | tuple = ()):
         self.on_async, self.on_log = on_async, on_log
         self.on_hardware = on_hardware
+        lim = limits.get()
         parent, child = socket.socketpair()
         self.sock = parent
-        env = {**_env(), "PIONEER_WORKER_FD": str(child.fileno())}
+        env = {**_env(), "PIONEER_WORKER_FD": str(child.fileno()),
+               "PIONEER_HW_RPC_TIMEOUT": str(lim.block_hardware_rpc_s)}
+        if preload and lim.block_preload:
+            env["PIONEER_PRELOAD"] = json.dumps(sorted(set(preload)))
         self.proc = subprocess.Popen([sys.executable, "-m", "pioneer.blockhost"], pass_fds=[child.fileno()],
                                      env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, start_new_session=True)
@@ -102,11 +114,17 @@ class BlockHostClient:
         self._ready = threading.Event()
         threading.Thread(target=self._reader, name="blockhost-rpc", daemon=True).start()
         threading.Thread(target=self._output, name="blockhost-out", daemon=True).start()
-        # Cold Python imports on the A35 must not consume the handler's 1 s budget.
-        if not self._ready.wait(WORKER_START_TIMEOUT_S) or self.dead:
-            self.dead = self.dead or f"процесс блоков не готов за {WORKER_START_TIMEOUT_S:g} с"
+        # Холодный старт Python, прогрев прослойки и preload файлов блоков — отдельный лимит,
+        # не бюджет обработчика.
+        start_s = lim.block_worker_start_s
+        if not self._ready.wait(start_s) or self.dead:
+            self.dead = self.dead or (f"процесс блоков не готов за {start_s:g} с — "
+                                      "лимит «Запуск процесса блоков»: Настройки → Система → Таймауты")
             self.close()
             raise NodeError(self.dead)
+
+    def bind(self, on_async, on_log, on_hardware) -> None:
+        self.on_async, self.on_log, self.on_hardware = on_async, on_log, on_hardware
 
     def _reader(self) -> None:
         try:
@@ -116,13 +134,16 @@ class BlockHostClient:
                     self._ready.set()
                 elif "hardware" in msg:
                     try:
+                        if self.on_hardware is None:
+                            raise RuntimeError("железо недоступно до запуска проекта (код верхнего уровня блока)")
                         result=self.on_hardware(msg["node"],msg["op"],msg["args"])
                         reply={"hardware_reply":msg["hardware"],"ok":True,"result":result}
                     except Exception as e:
                         reply={"hardware_reply":msg["hardware"],"ok":False,"error":str(e)[:1000]}
                     with self._send_lock:self.sock.sendall((json.dumps(reply)+"\n").encode())
                 elif "async" in msg:
-                    self.on_async(msg["async"], msg["actions"])
+                    if self.on_async is not None:
+                        self.on_async(msg["async"], msg["actions"])
                 elif slot := self._pending.pop(msg.get("id"), None):
                     slot[1] = msg
                     slot[0].set()
@@ -137,9 +158,14 @@ class BlockHostClient:
         for raw in iter(self.proc.stdout.readline, b""):
             text = raw.decode("utf-8", "replace").rstrip()
             if text:
-                self.on_log(text)
+                (self.on_log or log.info)(text)
 
-    def call(self, req: dict, timeout: float = CALL_TIMEOUT_S) -> list:
+    def call(self, req: dict, timeout: float | None = None) -> list:
+        what = "обработчик блока"
+        if timeout is None:
+            key, what = _LIMIT_FOR.get(req.get("op") if req.get("op") != "call" else req.get("method"),
+                                       ("block_call_s", what))
+            timeout = getattr(limits.get(), key)
         if self.dead:
             raise NodeError(f"{self.dead} — «Применить» перезапустит проект")
         rid = next(self._ids)
@@ -154,7 +180,8 @@ class BlockHostClient:
             raise NodeError(self.dead) from None
         if not slot[0].wait(timeout):
             self._pending.pop(rid, None)
-            self.dead = f"блок не ответил за {timeout:g} с, процесс блоков остановлен"
+            self.dead = (f"{what}: нет ответа за {timeout:g} с, процесс блоков остановлен — "
+                         "лимит: Настройки → Система → Таймауты")
             self.close()
             raise NodeError(self.dead)
         resp = slot[1]
@@ -242,8 +269,9 @@ class BlockProxy(Node):
                 pass
 
 
-def open_blockhost(rt) -> BlockHostClient:
-    """Фабрика для ProjectRuntime.blockhost(): async-действия блоков — новой волной."""
+def open_blockhost(rt, prepared: BlockHostClient | None = None) -> BlockHostClient:
+    """Фабрика для ProjectRuntime.blockhost(): async-действия блоков — новой волной.
+    prepared — процесс, запущенный заранее ProjectManager.start (preload вне потока движка)."""
     def on_async(node_id: str, actions: list) -> None:
         node = rt.nodes.get(node_id)
         if isinstance(node, BlockProxy):
@@ -252,7 +280,25 @@ def open_blockhost(rt) -> BlockHostClient:
     def on_log(text: str) -> None:
         rt.engine.loop.call_soon_threadsafe(rt.log, text)
     from pioneer.block_hardware import HardwareRPC
+    if prepared is not None and not prepared.dead:
+        prepared.bind(on_async, on_log, HardwareRPC(rt).call)
+        return prepared
+    if prepared is not None:
+        prepared.close()
     return BlockHostClient(on_async, on_log, HardwareRPC(rt).call)
+
+
+def block_files(graph, registry: NodeRegistry) -> list[str]:
+    """Файлы Python-блоков, которые использует (развёрнутый) граф, — для preload."""
+    files = []
+    for n in graph.nodes.values():
+        try:
+            cls = registry.for_node(n).cls
+        except Exception:  # noqa: BLE001 — неизвестный тип покажет проверка графа
+            continue
+        if isinstance(cls, type) and issubclass(cls, BlockProxy) and getattr(cls, "FILE", ""):
+            files.append(cls.FILE)
+    return files
 
 
 # ---------------------------------------------------------------- хранилище и регистрация

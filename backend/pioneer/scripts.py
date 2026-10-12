@@ -23,6 +23,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from pioneer import limits
 from pioneer.codetree import CodeTree, migrate
 from pioneer.config import REPO_ROOT
 from pioneer.hw import HW
@@ -93,6 +94,7 @@ class _Runner:
         self.sock = parent
         env = {**os.environ, "PIONEER_WORKER_FD": str(child.fileno()), "PYTHONUNBUFFERED": "1",
                "PIONEER_LIB": str(mgr.dir.parent / "lib"),
+               "PIONEER_RPC_TIMEOUT": str(limits.get().script_rpc_s),
                "PYTHONPATH": str(REPO_ROOT / "backend")}
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "pioneer.worker", str(path)],

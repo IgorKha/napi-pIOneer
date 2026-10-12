@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -31,6 +31,7 @@ class Config:
         "rk3308-uart1", "rk3308-uart2-m0", "rk3308-uart3-m0", "rk3308-i2c1-ds1338",
         "rk3308-i2c3-m0", "rk3308-usb20-host",
     )
+    limits: dict = field(default_factory=dict)
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -39,6 +40,8 @@ def load_config(path: Path | None = None) -> Config:
     if path is None or not path.exists():
         return cfg
     raw = tomllib.loads(path.read_text())
+    # [limits] — умолчания таймаутов worker'ов (pioneer.limits), проверяются при старте
+    cfg.limits = dict(raw.pop("limits", {}))
     for section in raw.values():
         for key, value in section.items():
             if not hasattr(cfg, key):

@@ -237,7 +237,9 @@ class ProjectManager:
         try:
             flat, aliases, _ = self._flat(graph)
             saved = self.state_store.load(pid, flat, self.registry) if meta.save_state else {}
-            rt = self.engine.start_project(pid, meta.name, flat, meta.rev, aliases, saved)
+            prepared = self._prepare_blockhost(flat)
+            rt = self.engine.start_project(pid, meta.name, flat, meta.rev, aliases, saved,
+                                           prepared_blockhost=prepared)
             if self.groups is not None:
                 rt.group_revs = self.groups.used_revs(graph)
         except (StartError, ValueError) as e:
@@ -246,6 +248,19 @@ class ProjectManager:
         self._set_status(pid, Status("running", started=time.time(), rev=meta.rev))
         self._pins_changed()
         return self.status(pid)
+
+    def _prepare_blockhost(self, flat):
+        """Процесс Python-блоков стартует и импортирует файлы блоков здесь, в потоке запроса:
+        холодный старт на A35 занимает секунды и не должен останавливать движок с другими
+        проектами. setup() блоков по-прежнему вызывается движком при старте."""
+        from pioneer.userblocks import BlockHostClient, block_files
+        files = block_files(flat, self.registry)
+        if not files:
+            return None
+        try:
+            return BlockHostClient(preload=files)
+        except NodeError as e:
+            raise StartError(str(e)) from None
 
     def stop(self, pid: str) -> dict:
         self.checkpoint(pid)

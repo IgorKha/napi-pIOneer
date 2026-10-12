@@ -163,6 +163,7 @@ class ProjectRuntime:
         self.views: dict[str, dict] = {}
         self._compat_hardware = {}
         self._blockhost = None  # процесс Python-блоков проекта (по требованию)
+        self._prepared_blockhost = None  # запущен заранее ProjectManager.start (preload вне потока движка)
         self.block_files: dict[str, float] = {}  # файл блока -> mtime при старте («граф изменён»)
         # live (читается из потока LiveHub)
         self._live_lock = threading.Lock()
@@ -228,7 +229,8 @@ class ProjectRuntime:
         """Worker-процесс Python-блоков этого проекта (создаётся первой нодой-блоком)."""
         if self._blockhost is None:
             from pioneer.userblocks import open_blockhost
-            self._blockhost = open_blockhost(self)
+            prepared, self._prepared_blockhost = self._prepared_blockhost, None
+            self._blockhost = open_blockhost(self, prepared)
         return self._blockhost
 
     def _teardown(self) -> None:
@@ -238,9 +240,10 @@ class ProjectRuntime:
                 node.stop()
             except Exception as e:  # стоп не должен застревать на одной ноде
                 self.log(f"{node.title}: ошибка при остановке: {_err_text(e)}", node=node, level="error")
-        if self._blockhost is not None:
-            self._blockhost.close()
-            self._blockhost = None
+        for host in (self._blockhost, self._prepared_blockhost):
+            if host is not None:
+                host.close()
+        self._blockhost = self._prepared_blockhost = None
         for session in self._compat_hardware.values():
             session.close()
         self._compat_hardware.clear()
@@ -664,15 +667,22 @@ class Engine:
 
     # ---- проекты
     def start_project(self, project_id: str, name: str, graph: Graph, rev: int = 0,
-                      aliases: dict[str, list[str]] | None = None, saved_state: dict | None = None) -> ProjectRuntime:
+                      aliases: dict[str, list[str]] | None = None, saved_state: dict | None = None,
+                      prepared_blockhost=None) -> ProjectRuntime:
         def run():
-            if project_id in self.runtimes:
-                raise StartError("проект уже запущен")
             try:
-                rt = ProjectRuntime(self, project_id, name, graph, rev, aliases, saved_state)
-            except KeyError as e:
-                raise StartError(str(e.args[0])) from None
-            self._check_manifest(rt)
+                if project_id in self.runtimes:
+                    raise StartError("проект уже запущен")
+                try:
+                    rt = ProjectRuntime(self, project_id, name, graph, rev, aliases, saved_state)
+                except KeyError as e:
+                    raise StartError(str(e.args[0])) from None
+                rt._prepared_blockhost = prepared_blockhost
+                self._check_manifest(rt)
+            except BaseException:
+                if prepared_blockhost is not None:
+                    prepared_blockhost.close()
+                raise
             rt.start()
             self.runtimes[project_id] = rt
             return rt

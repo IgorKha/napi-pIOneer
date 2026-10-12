@@ -1,4 +1,5 @@
 import {WatchdogSection} from "./WatchdogSection";
+import { LimitsSection } from "./LimitsSection";
 import { useEffect, useState } from "react";
 
 interface Status {
@@ -46,6 +47,7 @@ export function SystemPage() {
       <ul className="space-y-1 text-xs text-muted">{status.drivers.map(d => <li key={d.id}>{d.id} · {d.loaded ? "загружен" : "не загружен"} · автозагрузка {d.autoload ? "включена" : "выключена"}</li>)}</ul>
       {!status.drivers.length && <p className="text-xs text-muted">Нет установленных пакетов.</p>}
     </>}
+    <LimitsSection />
     <WatchdogSection />
   </section>;
 }

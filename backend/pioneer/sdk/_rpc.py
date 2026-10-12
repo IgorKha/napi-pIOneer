@@ -11,7 +11,8 @@ import queue
 import socket
 import threading
 
-RPC_TIMEOUT_S = 15.0
+# Задаётся core из pioneer.limits (script_rpc_s) при запуске скрипта.
+RPC_TIMEOUT_S = float(os.environ.get("PIONEER_RPC_TIMEOUT", "15"))
 _client: _Client | None = None
 
 
@@ -43,7 +44,8 @@ class _Client:
             with self._send_lock:
                 self.sock.sendall(line.encode())
             if not slot[0].wait(timeout):
-                raise PioneerError(f"RPC {op}: core не ответил за {timeout:g} с")
+                raise PioneerError(f"RPC {op}: core не ответил за {timeout:g} с — "
+                                  "лимит: Настройки → Система → Таймауты")
         finally:
             with self._pending_lock:
                 self._pending.pop(rid, None)

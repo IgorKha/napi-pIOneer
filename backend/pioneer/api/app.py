@@ -54,6 +54,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         from pioneer.language_service import LanguageService
         app.state.language = LanguageService(app.state.language_lock)
         app.state.started = time.monotonic()
+        from pioneer import limits
+        app.state.limits = limits.LimitsStore(cfg.data_dir / "settings.json", cfg.limits)
+        limits.configure(app.state.limits)
         dt = await asyncio.to_thread(read_dt, cfg.dt_dir)  # ~1.5 с на плате
         b = load_board(cfg.board_file, _read_overlays(cfg), dt)
         hal = create_hal(cfg.hal, b, bench_store=None)
